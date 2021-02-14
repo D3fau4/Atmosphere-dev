@@ -16,7 +16,8 @@ Result fsOpenSdCardFileSystemFwd(Service* s, FsFileSystem* out);
 Result fsOpenBisStorageFwd(Service* s, FsStorage* out, FsBisPartitionId partition_id);
 Result fsOpenDataStorageByCurrentProcessFwd(Service* s, FsStorage* out);
 Result fsOpenDataStorageByDataIdFwd(Service* s, FsStorage* out, u64 data_id, NcmStorageId storage_id);
-
+Result fsOpenGameCardStorage(FsStorage* out, const FsGameCardHandle* handle, u32 partition);
+Result _fsOpenGameCardFileSystem(FsFileSystem *out, const FsGameCardHandle *handle, u32 partition);
 Result fsOpenSaveDataFileSystemFwd(Service* s, FsFileSystem* out, FsSaveDataSpaceId save_data_space_id, const FsSaveDataAttribute *attr);
 
 Result fsOpenFileSystemWithPatchFwd(Service* s, FsFileSystem* out, u64 id, FsFileSystemType fsType);

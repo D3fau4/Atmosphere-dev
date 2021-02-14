@@ -313,6 +313,25 @@ namespace ams::mitm::fs {
         return ResultSuccess();
     }
 
+    Result FsMitmService::OpenGameCardStorage(sf::Out<sf::SharedPointer<ams::fssrv::sf::IStorage>> out, GameCardHandle handle, GameCardPartition partition) {
+        FsStorage data_storage;
+        const ::FsGameCardHandle _hnd = {handle};
+        R_TRY(fsOpenGameCardStorage(&data_storage, &_hnd, static_cast<::FsGameCardPartition>(partition)));
+        const sf::cmif::DomainObjectId target_object_id{serviceGetObjectId(&data_storage.s)};
+        //out.SetValue(MakeSharedStorage(meme), target_object_id);
+        return ResultSuccess();
+    }
+
+    Result FsMitmService::OpenGameCardFileSystem(sf::Out<sf::SharedPointer<ams::fssrv::sf::IFileSystem>> out, ams::fs::GameCardHandle handle, ams::fs::GameCardPartition partition) {
+        FsFileSystem base_fs;
+        const ::FsGameCardHandle _hnd = {handle};
+        R_TRY(_fsOpenGameCardFileSystem(&base_fs, &_hnd, static_cast<::FsGameCardPartition>(partition)));
+        const sf::cmif::DomainObjectId target_object_id{serviceGetObjectId(&base_fs.s)};
+        std::shared_ptr<fs::fsa::IFileSystem> redir_fs =  std::make_unique<RemoteFileSystem>(base_fs);
+        out.SetValue(MakeSharedFileSystem(std::move(redir_fs), false), target_object_id);
+        return ResultSuccess();
+    }
+
     Result FsMitmService::OpenDataStorageByCurrentProcess(sf::Out<sf::SharedPointer<ams::fssrv::sf::IStorage>> out) {
         /* Only mitm if we should override contents for the current process. */
         R_UNLESS(this->client_info.override_status.IsProgramSpecific(),     sm::mitm::ResultShouldForwardToSession());

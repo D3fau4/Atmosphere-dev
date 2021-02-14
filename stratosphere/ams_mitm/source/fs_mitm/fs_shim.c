@@ -27,6 +27,31 @@ Result fsOpenSdCardFileSystemFwd(Service* s, FsFileSystem* out) {
     return _fsOpenSession(s, &out->s, 18);
 }
 
+Result fsOpenGameCardStorage(FsStorage* out, const FsGameCardHandle* handle, u32 partition)
+{
+    struct {
+        u32 handle;
+        u32 partition;
+    } in = { handle->value, partition };
+    
+    return serviceDispatchIn(fsGetServiceSession(), 30, in,
+        .out_num_objects = 1,
+        .out_objects = &out->s
+    );
+}
+
+Result _fsOpenGameCardFileSystem(FsFileSystem *out, const FsGameCardHandle *handle, u32 partition){
+    const struct {
+        u32 handle;
+        u32 partition;
+    } in = { handle->value, partition };
+
+    return serviceDispatchIn(fsGetServiceSession(), 31, in,
+        .out_num_objects = 1,
+        .out_objects = &out->s,
+    );
+}
+
 Result fsOpenBisStorageFwd(Service* s, FsStorage* out, FsBisPartitionId partition_id) {
     const u32 tmp = partition_id;
     return serviceDispatchIn(s, 12, tmp,
