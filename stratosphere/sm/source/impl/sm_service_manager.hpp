@@ -43,6 +43,11 @@ namespace ams::sm::impl {
     Result ClearFutureMitm(os::ProcessId process_id, ServiceName service);
     Result AcknowledgeMitmSession(MitmProcessInfo *out_info, svc::Handle *out_hnd, os::ProcessId process_id, ServiceName service);
 
+    /* Dmnt record extensions. */
+    Result GetServiceRecordIndex(ServiceRecord *out, u64 index);
+    Result GetServiceRecord(ServiceRecord *out, ServiceName service);
+    Result GetServiceCount(u64 *out);
+
     /* Deferral extension (works around FS bug). */
     Result EndInitialDefers();
 

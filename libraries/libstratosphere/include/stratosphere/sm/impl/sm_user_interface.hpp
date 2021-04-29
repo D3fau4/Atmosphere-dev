@@ -33,6 +33,10 @@
     AMS_TIPC_METHOD_INFO(C, H, 65006, Result, AtmosphereDeclareFutureMitm,      (sm::ServiceName service),                                                                        (service))                                \
     AMS_TIPC_METHOD_INFO(C, H, 65007, Result, AtmosphereClearFutureMitm,        (sm::ServiceName service),                                                                        (service))                                \
     AMS_TIPC_METHOD_INFO(C, H, 65100, Result, AtmosphereHasService,             (tipc::Out<bool> out, sm::ServiceName service),                                                   (out, service))                           \
-    AMS_TIPC_METHOD_INFO(C, H, 65101, Result, AtmosphereWaitService,            (sm::ServiceName service),                                                                        (service))
+    AMS_TIPC_METHOD_INFO(C, H, 65101, Result, AtmosphereWaitService,            (sm::ServiceName service),                                                                        (service))                                \
+    AMS_TIPC_METHOD_INFO(C, H, 65102, Result, AtmosphereGetRecord,              (tipc::Out<sm::ServiceRecord> record, sm::ServiceName service),                                   (record, service))                        \
+    AMS_TIPC_METHOD_INFO(C, H, 65103, Result, AtmosphereListRecordsIndex,       (tipc::Out<sm::ServiceRecord> record, u64 offset),                                                (record, offset))             \
+    AMS_TIPC_METHOD_INFO(C, H, 65104, Result, AtmosphereListRecordsCount,       (tipc::Out<u64> offset),                                                                          (offset))             \
+    AMS_TIPC_METHOD_INFO(C, H, 65105, Result, AtmosphereGetRecordSize,          (tipc::Out<u64> record_size),                                                                     (record_size))
 
 AMS_TIPC_DEFINE_INTERFACE(ams::sm::impl, IUserInterface, AMS_SM_I_USER_INTERFACE_INTERFACE_INFO)

@@ -47,6 +47,10 @@ namespace ams::sm {
 
             Result AtmosphereHasService(tipc::Out<bool> out, ServiceName service);
             Result AtmosphereWaitService(ServiceName service);
+            Result AtmosphereGetRecord(tipc::Out<ServiceRecord> record, ServiceName service);
+            Result AtmosphereListRecordsIndex(tipc::Out<ServiceRecord> record, u64 offset);
+            Result AtmosphereListRecordsCount(tipc::Out<u64> offset);
+            Result AtmosphereGetRecordSize(tipc::Out<u64> record_size);
         public:
             /* Backwards compatibility layer for cmif. */
             Result ProcessDefaultServiceCommand(const svc::ipc::MessageBuffer &message_buffer);

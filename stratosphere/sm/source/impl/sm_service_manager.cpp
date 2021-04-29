@@ -460,6 +460,16 @@ namespace ams::sm::impl {
             *service_info = InvalidServiceInfo;
         }
 
+        void GetServiceInfoRecord(ServiceRecord *out_record, const ServiceInfo *service_info) {
+            out_record->service                     = service_info->name;
+            out_record->owner_process_id            = service_info->owner_process_id;
+            out_record->max_sessions                = service_info->max_sessions;
+            out_record->mitm_process_id             = service_info->mitm_process_id;
+            out_record->mitm_waiting_ack_process_id = service_info->mitm_waiting_ack_process_id;
+            out_record->is_light                    = service_info->is_light;
+            out_record->mitm_waiting_ack            = service_info->mitm_waiting_ack;
+        }
+
     }
 
     /* Client disconnection callback. */
@@ -862,6 +872,53 @@ namespace ams::sm::impl {
         /* Undefer requests to the session. */
         TriggerResume(service);
 
+        return ResultSuccess();
+    }
+
+    /* Dmnt record extensions. */
+    Result GetServiceRecord(ServiceRecord *out, ServiceName service) {
+        /* Validate service name. */
+        R_TRY(ValidateServiceName(service));
+
+        /* Validate that the service exists. */
+        const ServiceInfo *service_info = GetServiceInfo(service);
+        R_UNLESS(service_info != nullptr, sm::ResultNotRegistered());
+
+        GetServiceInfoRecord(out, service_info);
+        return ResultSuccess();
+    }
+
+    Result GetServiceRecordIndex(ServiceRecord *out, u64 index) {
+        u64 count = 0;
+        ServiceRecord tmp;
+        for (size_t i = 0; i < ServiceCountMax; i++) {
+            const ServiceInfo *service_info = &g_service_list[i];
+            if (service_info->name != InvalidServiceName) {
+                if (index == 0) {
+                    GetServiceInfoRecord(&tmp, service_info);
+                    break;
+                } else {
+                    index--;
+                }
+            }
+        }
+
+        *out = tmp;
+        return ResultSuccess();
+    }
+
+    Result GetServiceCount(u64 *out) {
+        u64 count = 0;
+        ServiceRecord tmp;
+        for (size_t i = 0; i < ServiceCountMax; i++) {
+            const ServiceInfo *service_info = &g_service_list[i];
+            if (service_info->name != InvalidServiceName) {
+                GetServiceInfoRecord(&tmp, service_info);
+                count++;
+            }
+        }
+
+        *out = count;
         return ResultSuccess();
     }
 

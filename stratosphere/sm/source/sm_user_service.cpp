@@ -101,6 +101,25 @@ namespace ams::sm {
         return impl::WaitService(service);
     }
 
+    Result UserService::AtmosphereGetRecord(tipc::Out<ServiceRecord> record, ServiceName service) {
+        return impl::GetServiceRecord(record.GetPointer(), service);
+    }
+
+    Result UserService::AtmosphereListRecordsIndex(tipc::Out<ServiceRecord> record, u64 offset) {
+        R_ABORT_UNLESS(impl::GetServiceRecordIndex(record.GetPointer(), offset));
+        return ResultSuccess();
+    }
+
+    Result UserService::AtmosphereListRecordsCount(tipc::Out<u64> offset) {
+        R_ABORT_UNLESS(impl::GetServiceCount(offset.GetPointer()));
+        return ResultSuccess();
+    }
+
+    Result UserService::AtmosphereGetRecordSize(tipc::Out<u64> record_size) {
+        record_size.SetValue(sizeof(ServiceRecord));
+        return ResultSuccess();
+    }
+
 }
 
 /* Include the backwards compatibility shim for CMIF. */
