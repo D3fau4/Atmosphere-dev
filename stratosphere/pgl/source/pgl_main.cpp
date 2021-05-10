@@ -21,7 +21,7 @@ extern "C" {
     u32 __nx_applet_type = AppletType_None;
     u32 __nx_fs_num_sessions = 1;
 
-    #define INNER_HEAP_SIZE 0x4000
+    #define INNER_HEAP_SIZE 0x0
     size_t nx_inner_heap_size = INNER_HEAP_SIZE;
     char   nx_inner_heap[INNER_HEAP_SIZE];
 
@@ -33,17 +33,15 @@ extern "C" {
     alignas(16) u8 __nx_exception_stack[ams::os::MemoryPageSize];
     u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
     void __libnx_exception_handler(ThreadExceptionDump *ctx);
+
+    void *__libnx_alloc(size_t size);
+    void *__libnx_aligned_alloc(size_t alignment, size_t size);
+    void __libnx_free(void *mem);
 }
 
 namespace ams {
 
     ncm::ProgramId CurrentProgramId = ncm::SystemProgramId::Pgl;
-
-    namespace result {
-
-        bool CallFatalOnResultAssertion = false;
-
-    }
 
 }
 
@@ -51,51 +49,6 @@ using namespace ams;
 
 void __libnx_exception_handler(ThreadExceptionDump *ctx) {
     ams::CrashHandler(ctx);
-}
-
-namespace ams::pgl {
-
-    namespace {
-
-        /* pgl. */
-        constexpr size_t NumServers  = 1;
-        ams::sf::hipc::ServerManager<NumServers> g_server_manager;
-
-        constexpr sm::ServiceName ShellServiceName = sm::ServiceName::Encode("pgl");
-        constexpr size_t          ShellMaxSessions = 8; /* Official maximum is 8. */
-
-        constinit pgl::srv::ShellInterface g_shell_interface;
-
-        void RegisterServiceSession() {
-            R_ABORT_UNLESS((g_server_manager.RegisterServer<pgl::sf::IShellInterface, pgl::srv::ShellInterface>(ShellServiceName, ShellMaxSessions, ams::sf::GetSharedPointerTo<pgl::sf::IShellInterface>(g_shell_interface))));
-        }
-
-        void LoopProcess() {
-            g_server_manager.LoopProcess();
-        }
-
-        /* NOTE: Nintendo reserves only 0x2000 bytes for this heap, which is used "mostly" to allocate shell event observers. */
-        /* However, we would like very much for homebrew sysmodules to be able to subscribe to events if they so choose */
-        /* And so we will use a larger heap (32 KB). */
-        /* We should have a smaller memory footprint than N in the end, regardless. */
-        u8 g_heap_memory[32_KB];
-        TYPED_STORAGE(ams::sf::ExpHeapMemoryResource) g_heap_memory_resource;
-
-        void *Allocate(size_t size) {
-            return lmem::AllocateFromExpHeap(GetReference(g_heap_memory_resource).GetHandle(), size);
-        }
-
-        void Deallocate(void *p, size_t size) {
-            return lmem::FreeToExpHeap(GetReference(g_heap_memory_resource).GetHandle(), p);
-        }
-
-        void InitializeHeap() {
-            auto heap_handle = lmem::CreateExpHeap(g_heap_memory, sizeof(g_heap_memory), lmem::CreateOption_ThreadSafe);
-            new (GetPointer(g_heap_memory_resource)) ams::sf::ExpHeapMemoryResource(heap_handle);
-        }
-
-    }
-
 }
 
 void __libnx_initheap(void) {
@@ -108,23 +61,23 @@ void __libnx_initheap(void) {
 
 	fake_heap_start = (char*)addr;
 	fake_heap_end   = (char*)addr + size;
-
-    ams::pgl::InitializeHeap();
 }
 
 void __appInit(void) {
     hos::InitializeForStratosphere();
 
-    fs::SetAllocator(pgl::Allocate, pgl::Deallocate);
+    ams::pgl::srv::InitializeHeap();
 
-    sm::DoWithSession([&]() {
-        R_ABORT_UNLESS(setInitialize());
-        R_ABORT_UNLESS(setsysInitialize());
-        R_ABORT_UNLESS(pmshellInitialize());
-        R_ABORT_UNLESS(ldrShellInitialize());
-        R_ABORT_UNLESS(lrInitialize());
-        R_ABORT_UNLESS(fsInitialize());
-    });
+    fs::SetAllocator(pgl::srv::Allocate, pgl::srv::Deallocate);
+
+    R_ABORT_UNLESS(sm::Initialize());
+
+    R_ABORT_UNLESS(setInitialize());
+    R_ABORT_UNLESS(setsysInitialize());
+    R_ABORT_UNLESS(pmshellInitialize());
+    R_ABORT_UNLESS(ldrShellInitialize());
+    R_ABORT_UNLESS(lrInitialize());
+    R_ABORT_UNLESS(fsInitialize());
 
     ams::CheckApiVersion();
 }
@@ -138,6 +91,37 @@ void __appExit(void) {
     setExit();
 }
 
+namespace ams {
+
+    void *Malloc(size_t size) {
+        AMS_ABORT("ams::Malloc was called");
+    }
+
+    void Free(void *ptr) {
+        AMS_ABORT("ams::Free was called");
+    }
+
+}
+
+void *operator new(size_t size) {
+    return pgl::srv::Allocate(size);
+}
+
+void operator delete(void *p) {
+    return pgl::srv::Deallocate(p, 0);
+}
+
+void *__libnx_alloc(size_t size) {
+    AMS_ABORT("__libnx_alloc was called");
+}
+
+void *__libnx_aligned_alloc(size_t alignment, size_t size) {
+    AMS_ABORT("__libnx_aligned_alloc was called");
+}
+
+void __libnx_free(void *mem) {
+    AMS_ABORT("__libnx_free was called");
+}
 
 int main(int argc, char **argv)
 {
@@ -148,14 +132,8 @@ int main(int argc, char **argv)
     os::SetThreadNamePointer(os::GetCurrentThread(), AMS_GET_SYSTEM_THREAD_NAME(pgl, Main));
     AMS_ASSERT(os::GetThreadPriority(os::GetCurrentThread()) == AMS_GET_SYSTEM_THREAD_PRIORITY(pgl, Main));
 
-    /* Register the pgl service. */
-    pgl::RegisterServiceSession();
-
-    /* Initialize the server library. */
-    pgl::srv::Initialize(std::addressof(pgl::g_shell_interface), GetPointer(pgl::g_heap_memory_resource));
-
-    /* Loop forever, servicing our services. */
-    pgl::LoopProcess();
+    /* Initialize and start the server. */
+    pgl::srv::StartServer();
 
     /* Cleanup */
     return 0;

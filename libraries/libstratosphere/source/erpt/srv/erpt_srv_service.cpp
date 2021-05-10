@@ -18,8 +18,11 @@
 #include "erpt_srv_context_impl.hpp"
 #include "erpt_srv_session_impl.hpp"
 #include "erpt_srv_stream.hpp"
+#include "erpt_srv_forced_shutdown.hpp"
 
 namespace ams::erpt::srv {
+
+    extern ams::sf::ExpHeapAllocator g_sf_allocator;
 
     namespace {
 
@@ -39,26 +42,40 @@ namespace ams::erpt::srv {
 
         alignas(os::ThreadStackAlignment) u8 g_server_thread_stack[16_KB];
 
+        enum PortIndex {
+            PortIndex_Report,
+            PortIndex_Context,
+        };
+
         class ErrorReportServiceManager : public ams::sf::hipc::ServerManager<ErrorReportNumServers, ErrorReportServerOptions, ErrorReportMaxSessions> {
             private:
                 os::ThreadType thread;
-                std::shared_ptr<erpt::sf::IContext> context_session_object;
+                ams::sf::UnmanagedServiceObject<erpt::sf::IContext, erpt::srv::ContextImpl> context_session_object;
             private:
                 static void ThreadFunction(void *_this) {
                     reinterpret_cast<ErrorReportServiceManager *>(_this)->SetupAndLoopProcess();
                 }
 
                 void SetupAndLoopProcess();
-            public:
-                ErrorReportServiceManager(erpt::srv::ContextImpl *c)
-                    : context_session_object(ams::sf::GetSharedPointerTo<erpt::sf::IContext, erpt::srv::ContextImpl>(c))
-                {
-                    /* ... */
-                }
 
+                virtual Result OnNeedsToAccept(int port_index, Server *server) override {
+                    switch (port_index) {
+                        case PortIndex_Report:
+                            {
+                                auto intf = ams::sf::ObjectFactory<ams::sf::ExpHeapAllocator::Policy>::CreateSharedEmplaced<erpt::sf::ISession, erpt::srv::SessionImpl>(std::addressof(g_sf_allocator));
+                                AMS_ABORT_UNLESS(intf != nullptr);
+                                return this->AcceptImpl(server, intf);
+                            }
+                        case PortIndex_Context:
+                            return AcceptImpl(server, this->context_session_object.GetShared());
+                        default:
+                            return erpt::ResultNotSupported();
+                    }
+                }
+            public:
                 Result Initialize() {
-                    R_ABORT_UNLESS((this->RegisterServer<erpt::sf::IContext, erpt::srv::ContextImpl>(ErrorReportContextServiceName, ErrorReportContextSessions, this->context_session_object)));
-                    R_ABORT_UNLESS((this->RegisterServer<erpt::sf::ISession, erpt::srv::SessionImpl>(ErrorReportReportServiceName, ErrorReportReportSessions)));
+                    R_ABORT_UNLESS(this->RegisterServer(PortIndex_Context, ErrorReportContextServiceName, ErrorReportContextSessions));
+                    R_ABORT_UNLESS(this->RegisterServer(PortIndex_Report,  ErrorReportReportServiceName, ErrorReportReportSessions));
 
                     this->ResumeProcessing();
 
@@ -101,8 +118,10 @@ namespace ams::erpt::srv {
                             case psc::PmState_ReadyAwaken:
                                 Stream::EnableFsAccess(true);
                                 break;
-                            case psc::PmState_ReadySleep:
                             case psc::PmState_ReadyShutdown:
+                                FinalizeForcedShutdownDetection();
+                                [[fallthrough]];
+                            case psc::PmState_ReadySleep:
                                 Stream::EnableFsAccess(false);
                                 break;
                             default:
@@ -117,8 +136,7 @@ namespace ams::erpt::srv {
             }
         }
 
-        constinit erpt::srv::ContextImpl g_context_object;
-        ErrorReportServiceManager g_erpt_server_manager(std::addressof(g_context_object));
+        ErrorReportServiceManager g_erpt_server_manager;
 
     }
 

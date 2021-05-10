@@ -25,11 +25,13 @@ namespace ams::kern::board::nintendo::nx {
                     /* Initialization. */
                     static size_t GetIntendedMemorySize();
                     static KPhysicalAddress GetKernelPhysicalBaseAddress(uintptr_t base_address);
+                    static KPhysicalAddress GetInitialProcessBinaryPhysicalAddress();
                     static bool ShouldIncreaseThreadResourceLimit();
                     static void CpuOn(u64 core_id, uintptr_t entrypoint, uintptr_t arg);
                     static size_t GetApplicationPoolSize();
                     static size_t GetAppletPoolSize();
                     static size_t GetMinimumNonSecureSystemPoolSize();
+                    static u8 GetDebugLogUartPort();
 
                     /* Randomness. */
                     static void GenerateRandomBytes(void *dst, size_t size);

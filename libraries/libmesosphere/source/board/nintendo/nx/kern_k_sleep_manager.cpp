@@ -84,6 +84,7 @@ namespace ams::kern::board::nintendo::nx {
             do {
                 bool res = smc::ReadWriteRegister(std::addressof(value), PmcPhysicalAddress + APBDEV_PMC_PWRGATE_STATUS, 0, 0);
                 MESOSPHERE_ASSERT(res);
+                MESOSPHERE_UNUSED(res);
             } while ((value & PWRGATE_STATUS_CE123_MASK) != 0);
         }
 
@@ -491,7 +492,7 @@ namespace ams::kern::board::nintendo::nx {
             /* Wait for a request. */
             {
                 KScopedLightLock lk(g_cv_lock);
-                while (!(g_sleep_target_cores & target_core_mask)) {
+                while ((g_sleep_target_cores & target_core_mask) == 0) {
                     g_cv.Wait(std::addressof(g_cv_lock));
                 }
             }

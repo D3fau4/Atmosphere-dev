@@ -27,6 +27,7 @@ namespace ams::erpt::srv {
     class Stream {
         private:
             static bool s_can_access_fs;
+            static os::SdkMutex s_fs_commit_mutex;
         private:
             u32 buffer_size;
             u32 file_position;
@@ -46,7 +47,7 @@ namespace ams::erpt::srv {
             Result WriteStream(const u8 *src, u32 src_size);
             void CloseStream();
 
-            Result GetStreamSize(s64 *out);
+            Result GetStreamSize(s64 *out) const;
         private:
             Result Flush();
         public:

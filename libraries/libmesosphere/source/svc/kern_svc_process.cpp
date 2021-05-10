@@ -21,8 +21,8 @@ namespace ams::kern::svc {
 
     namespace {
 
-        constexpr bool IsValidCoreId(int32_t core_id) {
-            return (0 <= core_id && core_id < static_cast<int32_t>(cpu::NumCores));
+        constexpr bool IsValidVirtualCoreId(int32_t core_id) {
+            return (0 <= core_id && core_id < static_cast<int32_t>(cpu::NumVirtualCores));
         }
 
         void ExitProcess() {
@@ -175,9 +175,9 @@ namespace ams::kern::svc {
             R_UNLESS(params.code_address + code_size - 1 <= map_end - 1,    svc::ResultInvalidMemoryRegion());
 
             /* Check that the number of pages is valid for the kernel address space. */
-            R_UNLESS(code_num_pages            < (kern::MainMemorySize / PageSize), svc::ResultOutOfMemory());
-            R_UNLESS(system_resource_num_pages < (kern::MainMemorySize / PageSize), svc::ResultOutOfMemory());
-            R_UNLESS(total_pages               < (kern::MainMemorySize / PageSize), svc::ResultOutOfMemory());
+            R_UNLESS(code_num_pages            < (kern::MainMemorySizeMax / PageSize), svc::ResultOutOfMemory());
+            R_UNLESS(system_resource_num_pages < (kern::MainMemorySizeMax / PageSize), svc::ResultOutOfMemory());
+            R_UNLESS(total_pages               < (kern::MainMemorySizeMax / PageSize), svc::ResultOutOfMemory());
 
             /* Check that optimized memory allocation is used only for applications. */
             const bool optimize_allocs = (params.flags & ams::svc::CreateProcessFlag_OptimizeMemoryAllocation) != 0;
@@ -230,7 +230,7 @@ namespace ams::kern::svc {
             R_TRY(process->Initialize(params, user_caps, num_caps, process_resource_limit, pool));
 
             /* Register the process. */
-            R_TRY(KProcess::Register(process));
+            KProcess::Register(process);
 
             /* Add the process to the handle table. */
             R_TRY(handle_table.Add(out, process));
@@ -275,7 +275,7 @@ namespace ams::kern::svc {
             R_UNLESS(process.IsNotNull(), svc::ResultInvalidHandle());
 
             /* Validate the core id. */
-            R_UNLESS(IsValidCoreId(core_id),                           svc::ResultInvalidCoreId());
+            R_UNLESS(IsValidVirtualCoreId(core_id),                    svc::ResultInvalidCoreId());
             R_UNLESS(((1ul << core_id) & process->GetCoreMask()) != 0, svc::ResultInvalidCoreId());
 
             /* Validate the priority. */
@@ -286,12 +286,7 @@ namespace ams::kern::svc {
             process->SetIdealCoreId(core_id);
 
             /* Run the process. */
-            R_TRY(process->Run(priority, static_cast<size_t>(main_thread_stack_size)));
-
-            /* Open a reference to the process, since it's now running. */
-            process->Open();
-
-            return ResultSuccess();
+            return process->Run(priority, static_cast<size_t>(main_thread_stack_size));
         }
 
         Result TerminateProcess(ams::svc::Handle process_handle) {

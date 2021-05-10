@@ -18,6 +18,22 @@
 
 namespace ams::psc {
 
+    /* TODO: Nintendo uses sf::ShimLobraryObjectHolder here, we should similarly consider switching. */
+    namespace {
+
+        struct PscRemotePmModuleTag;
+        using RemoteAllocator     = ams::sf::ExpHeapStaticAllocator<2_KB, PscRemotePmModuleTag>;
+        using RemoteObjectFactory = ams::sf::ObjectFactory<typename RemoteAllocator::Policy>;
+
+        class StaticAllocatorInitializer {
+            public:
+                StaticAllocatorInitializer() {
+                    RemoteAllocator::Initialize(lmem::CreateOption_None);
+                }
+        } g_static_allocator_initializer;
+
+    }
+
     PmModule::PmModule() : intf(nullptr), initialized(false), reserved(0) { /* ... */ }
 
     PmModule::~PmModule() {
@@ -30,11 +46,11 @@ namespace ams::psc {
     Result PmModule::Initialize(const PmModuleId mid, const PmModuleId *dependencies, u32 dependency_count, os::EventClearMode clear_mode) {
         R_UNLESS(!this->initialized, psc::ResultAlreadyInitialized());
 
-        static_assert(sizeof(*dependencies) == sizeof(u16));
+        static_assert(sizeof(*dependencies) == sizeof(u32));
         ::PscPmModule module;
-        R_TRY(::pscmGetPmModule(std::addressof(module), static_cast<::PscPmModuleId>(mid), reinterpret_cast<const u16 *>(dependencies), dependency_count, clear_mode == os::EventClearMode_AutoClear));
+        R_TRY(::pscmGetPmModule(std::addressof(module), static_cast<::PscPmModuleId>(mid), reinterpret_cast<const u32 *>(dependencies), dependency_count, clear_mode == os::EventClearMode_AutoClear));
 
-        this->intf = ams::sf::MakeShared<psc::sf::IPmModule, RemotePmModule>(module);
+        this->intf = RemoteObjectFactory::CreateSharedEmplaced<psc::sf::IPmModule, RemotePmModule>(module);
         this->system_event.AttachReadableHandle(module.event.revent, false, clear_mode);
         this->initialized = true;
         return ResultSuccess();

@@ -73,11 +73,11 @@ namespace ams {
             ams_ctx.sp = ctx->sp.x;
             ams_ctx.pc = ctx->pc.x;
             ams_ctx.pstate = ctx->pstate;
-            ams_ctx.afsr0 = ctx->afsr0;
-            ams_ctx.afsr1 = (static_cast<u64>(::ams::exosphere::GetVersion(ATMOSPHERE_RELEASE_VERSION)) << 32) | static_cast<u64>(hos::GetVersion());
+            ams_ctx.afsr0 = static_cast<u32>(::ams::exosphere::GetVersion(ATMOSPHERE_RELEASE_VERSION));
             if (svc::IsKernelMesosphere()) {
-                ams_ctx.afsr1 |= (static_cast<u64>('M') << (BITSIZEOF(u64) - BITSIZEOF(u8)));
+                ams_ctx.afsr0 |= (static_cast<u32>('M') << (BITSIZEOF(u32) - BITSIZEOF(u8)));
             }
+            ams_ctx.afsr1 = static_cast<u32>(hos::GetVersion());
             ams_ctx.far = ctx->far.x;
             ams_ctx.report_identifier = armGetSystemTick();
 
@@ -117,7 +117,7 @@ namespace ams {
                 StackFrame cur_frame;
                 svc::lp64::MemoryInfo mem_info;
                 svc::PageInfo page_info;
-                if (R_SUCCEEDED(svc::QueryMemory(std::addressof(mem_info), std::addressof(page_info), cur_fp)) && (mem_info.perm & Perm_R) == Perm_R) {
+                if (R_SUCCEEDED(svc::QueryMemory(std::addressof(mem_info), std::addressof(page_info), cur_fp)) && (mem_info.perm & svc::MemoryPermission_Read) == svc::MemoryPermission_Read) {
                     std::memcpy(&cur_frame, reinterpret_cast<void *>(cur_fp), sizeof(cur_frame));
                 } else {
                     break;
@@ -136,7 +136,7 @@ namespace ams {
             {
                 svc::lp64::MemoryInfo mem_info;
                 svc::PageInfo page_info;
-                if (R_SUCCEEDED(svc::QueryMemory(std::addressof(mem_info), std::addressof(page_info), ams_ctx.sp)) && (mem_info.perm & Perm_R) == Perm_R) {
+                if (R_SUCCEEDED(svc::QueryMemory(std::addressof(mem_info), std::addressof(page_info), ams_ctx.sp)) && (mem_info.perm & svc::MemoryPermission_Read) == svc::MemoryPermission_Read) {
                     size_t copy_size = std::min(FatalErrorContext::MaxStackDumpSize, static_cast<size_t>(mem_info.addr + mem_info.size - ams_ctx.sp));
                     ams_ctx.stack_dump_size = copy_size;
                     std::memcpy(ams_ctx.stack_dump, reinterpret_cast<void *>(ams_ctx.sp), copy_size);
@@ -153,30 +153,14 @@ namespace ams {
         ::ams::ExceptionHandler(&ams_ctx);
     }
 
-    inline NORETURN void AbortImpl() {
-        /* Just perform a data abort. */
-        register u64 addr __asm__("x27") = FatalErrorContext::StdAbortMagicAddress;
-        register u64 val __asm__("x28")  = FatalErrorContext::StdAbortMagicValue;
-        while (true) {
-            __asm__ __volatile__ (
-                "str %[val], [%[addr]]"
-                :
-                : [val]"r"(val), [addr]"r"(addr)
-            );
-        }
-        __builtin_unreachable();
-    }
+    NORETURN void AbortImpl();
 
 }
 
 extern "C" {
 
-    /* Redefine abort to trigger these handlers. */
-    void abort();
-
     /* Redefine C++ exception handlers. Requires wrap linker flag. */
-    #define WRAP_ABORT_FUNC(func) void NORETURN __wrap_##func(void) { abort(); __builtin_unreachable(); }
-    WRAP_ABORT_FUNC(__cxa_pure_virtual)
+    #define WRAP_ABORT_FUNC(func) void NORETURN __wrap_##func(void) { ::ams::AbortImpl(); __builtin_unreachable(); }
     WRAP_ABORT_FUNC(__cxa_throw)
     WRAP_ABORT_FUNC(__cxa_rethrow)
     WRAP_ABORT_FUNC(__cxa_allocate_exception)
@@ -195,13 +179,4 @@ extern "C" {
     WRAP_ABORT_FUNC(_Unwind_Resume)
     #undef WRAP_ABORT_FUNC
 
-}
-
-/* Custom abort handler, so that std::abort will trigger these. */
-void abort() {
-    static ams::os::Mutex abort_lock(true);
-    std::scoped_lock lk(abort_lock);
-
-    ams::AbortImpl();
-    __builtin_unreachable();
 }

@@ -464,7 +464,7 @@ namespace ams::updater {
             case spl::HardwareType::Hoag:
             case spl::HardwareType::Iowa:
             case spl::HardwareType::Calcio:
-            case spl::HardwareType::_Five_:
+            case spl::HardwareType::Aula:
                 return BootImageUpdateType::Mariko;
             AMS_UNREACHABLE_DEFAULT_CASE();
         }
@@ -549,8 +549,8 @@ namespace ams::updater {
         }
 
         /* Get a session to ncm. */
-        sm::ScopedServiceHolder<ncm::Initialize, ncm::Finalize> ncm_holder;
-        R_ABORT_UNLESS(ncm_holder.GetResult());
+        ncm::Initialize();
+        ON_SCOPE_EXIT { ncm::Finalize(); };
 
         /* Verify normal, verify safe as needed. */
         if (verification_state.needs_verify_normal) {

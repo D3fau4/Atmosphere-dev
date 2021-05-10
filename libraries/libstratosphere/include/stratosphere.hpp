@@ -45,6 +45,7 @@
 #include <stratosphere/capsrv.hpp>
 #include <stratosphere/cfg.hpp>
 #include <stratosphere/clkrst.hpp>
+#include <stratosphere/cs.hpp>
 #include <stratosphere/ddsf.hpp>
 #include <stratosphere/dmnt.hpp>
 #include <stratosphere/erpt.hpp>
@@ -53,6 +54,10 @@
 #include <stratosphere/gpio.hpp>
 #include <stratosphere/hid.hpp>
 #include <stratosphere/hos.hpp>
+#include <stratosphere/htc.hpp>
+#include <stratosphere/htcfs.hpp>
+#include <stratosphere/htclow.hpp>
+#include <stratosphere/htcs.hpp>
 #include <stratosphere/i2c.hpp>
 #include <stratosphere/kvdb.hpp>
 #include <stratosphere/ldr.hpp>
@@ -61,6 +66,7 @@
 #include <stratosphere/ncm.hpp>
 #include <stratosphere/nim.hpp>
 #include <stratosphere/ns.hpp>
+#include <stratosphere/nsd.hpp>
 #include <stratosphere/patcher.hpp>
 #include <stratosphere/pcv.hpp>
 #include <stratosphere/pgl.hpp>
@@ -72,14 +78,22 @@
 #include <stratosphere/regulator.hpp>
 #include <stratosphere/ro.hpp>
 #include <stratosphere/settings.hpp>
+#include <stratosphere/scs.hpp>
 #include <stratosphere/sf.hpp>
 #include <stratosphere/sm.hpp>
+#include <stratosphere/socket.hpp>
 #include <stratosphere/spl.hpp>
 #include <stratosphere/time.hpp>
+#include <stratosphere/tipc.hpp>
+#include <stratosphere/tma.hpp>
 #include <stratosphere/updater.hpp>
+#include <stratosphere/usb.hpp>
 #include <stratosphere/wec.hpp>
 
 /* Include FS last. */
 #include <stratosphere/fs.hpp>
 #include <stratosphere/fssrv.hpp>
 #include <stratosphere/fssystem.hpp>
+
+/* External modules that we're including. */
+#include <stratosphere/rapidjson.hpp>

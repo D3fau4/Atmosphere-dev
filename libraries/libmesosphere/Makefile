@@ -11,12 +11,12 @@ include $(CURRENT_DIRECTORY)/../config/common.mk
 PRECOMPILED_HEADERS := include/mesosphere.hpp
 
 DEFINES     := $(ATMOSPHERE_DEFINES) -DATMOSPHERE_IS_MESOSPHERE
-SETTINGS    := $(ATMOSPHERE_SETTINGS) -O2 -mgeneral-regs-only -ffixed-x18 -Wextra -Werror -fno-non-call-exceptions
+SETTINGS    := $(ATMOSPHERE_SETTINGS) -Os -mgeneral-regs-only -ffixed-x18 -Wextra -Werror -fno-non-call-exceptions
 CFLAGS      := $(ATMOSPHERE_CFLAGS) $(SETTINGS) $(DEFINES) $(INCLUDE)
 CXXFLAGS    := $(CFLAGS) $(ATMOSPHERE_CXXFLAGS) -fno-use-cxa-atexit -flto
 ASFLAGS     := $(ATMOSPHERE_ASFLAGS) $(SETTINGS) $(DEFINES) $(INCLUDE)
 
-SOURCES     += $(call ALL_SOURCE_DIRS,../libvapours/source)
+SOURCES     += $(foreach v,$(call ALL_SOURCE_DIRS,../libvapours/source),$(if $(findstring ../libvapours/source/sdmmc,$v),,$v))
 
 LIBS        :=
 
@@ -139,6 +139,8 @@ $(filter-out kern_svc_tables.o, $(OFILES))	:	$(GCH_FILES)
 $(OFILES_SRC)	: $(HFILES_BIN)
 
 kern_libc_generic.o: CFLAGS += -fno-builtin
+
+kern_k_auto_object.o: CXXFLAGS += -fno-lto
 
 #---------------------------------------------------------------------------------
 %_bin.h %.bin.o	:	%.bin

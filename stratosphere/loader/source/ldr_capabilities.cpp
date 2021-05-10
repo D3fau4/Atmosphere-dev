@@ -44,7 +44,7 @@ namespace ams::ldr::caps {
             constexpr ALWAYS_INLINE typename name::Type Get##name() const { return this->Get<name>(); }
 
         constexpr ALWAYS_INLINE CapabilityId GetCapabilityId(util::BitPack32 cap) {
-            return static_cast<CapabilityId>(__builtin_ctz(~cap.value));
+            return static_cast<CapabilityId>(util::CountTrailingZeros<u32>(~cap.value));
         }
 
         constexpr inline util::BitPack32 EmptyCapability = {~u32{}};
@@ -419,11 +419,9 @@ namespace ams::ldr::caps {
             switch (GetCapabilityId(cur_cap)) {
                 case CapabilityId::MapRegion:
                     {
-                        /* MapRegion was added in 8.0.0+. */
-                        /* To prevent kernel error, we should reject the descriptor on lower firmwares. */
-                        /* NOTE: We also allow it on any firmware under mesosphere, as an extension. */
-                        const bool is_allowed = (hos::GetVersion() >= hos::Version_8_0_0 || svc::IsKernelMesosphere());
-                        if (!is_allowed) {
+                        /* MapRegion was added in 8.0.0+, and is only allowed under kernels which have the relevant mappings. */
+                        /* However, we allow it under all firmwares on mesosphere, to facilitate KTrace usage by hbl. */
+                        if (!svc::IsKTraceEnabled()) {
                             caps[i] = EmptyCapability;
                         }
                     }

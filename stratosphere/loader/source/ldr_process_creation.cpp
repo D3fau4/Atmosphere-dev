@@ -96,7 +96,10 @@ namespace ams::ldr {
             size_t num_entries = 0;
 
             const auto hos_version = hos::GetVersion();
-            if (hos_version >= hos::Version_10_1_0) {
+            if (hos_version >= hos::Version_11_0_0) {
+                entries = g_MinimumProgramVersions1100;
+                num_entries = g_MinimumProgramVersionsCount1100;
+            } else if (hos_version >= hos::Version_10_1_0) {
                 entries = g_MinimumProgramVersions1010;
                 num_entries = g_MinimumProgramVersionsCount1010;
             } else if (hos_version >= hos::Version_10_0_0) {
@@ -323,6 +326,13 @@ namespace ams::ldr {
                 }
             }
 
+            /* 11.0.0+ Set Disable DAS merge. */
+            if (hos::GetVersion() >= hos::Version_11_0_0 || svc::IsKernelMesosphere()) {
+                if (meta_flags & Npdm::MetaFlag_DisableDeviceAddressSpaceMerge) {
+                    flags |= svc::CreateProcessFlag_DisableDeviceAddressSpaceMerge;
+                }
+            }
+
             *out = flags;
             return ResultSuccess();
         }
@@ -454,13 +464,18 @@ namespace ams::ldr {
         Result CreateProcessImpl(ProcessInfo *out, const Meta *meta, const NsoHeader *nso_headers, const bool *has_nso, const args::ArgumentInfo *arg_info, u32 flags, Handle reslimit_h) {
             /* Get CreateProcessParameter. */
             svc::CreateProcessParameter param;
-            R_TRY(GetCreateProcessParameter(&param, meta, flags, reslimit_h));
+            R_TRY(GetCreateProcessParameter(std::addressof(param), meta, flags, reslimit_h));
 
             /* Decide on an NSO layout. */
-            R_TRY(DecideAddressSpaceLayout(out, &param, nso_headers, has_nso, arg_info));
+            R_TRY(DecideAddressSpaceLayout(out, std::addressof(param), nso_headers, has_nso, arg_info));
 
-            /* Actually create process. const_cast necessary because libnx doesn't declare svcCreateProcess with const u32*. */
-            return svcCreateProcess(out->process_handle.GetPointer(), &param, reinterpret_cast<const u32 *>(meta->aci_kac), meta->aci->kac_size / sizeof(u32));
+            /* Actually create process. */
+            Handle process_handle;
+            R_TRY(svc::CreateProcess(std::addressof(process_handle), std::addressof(param), static_cast<const u32 *>(meta->aci_kac), meta->aci->kac_size / sizeof(u32)));
+
+            /* Set the output handle. */
+            *out->process_handle.GetPointer() = process_handle;
+            return ResultSuccess();
         }
 
         Result LoadNsoSegment(fs::FileHandle file, const NsoHeader::SegmentInfo *segment, size_t file_size, const u8 *file_hash, bool is_compressed, bool check_hash, uintptr_t map_base, uintptr_t map_end) {
@@ -518,6 +533,9 @@ namespace ams::ldr {
                 std::memset(reinterpret_cast<void *>(map_address + text_end), 0, nso_header->ro_dst_offset - text_end);
                 std::memset(reinterpret_cast<void *>(map_address + ro_end),   0, nso_header->rw_dst_offset - ro_end);
                 std::memset(reinterpret_cast<void *>(map_address + rw_end), 0, nso_header->bss_size);
+
+                /* Apply embedded patches. */
+                ApplyEmbeddedPatchesToModule(nso_header->build_id, map_address, nso_size);
 
                 /* Apply IPS patches. */
                 LocateAndApplyIpsPatchesToModule(nso_header->build_id, map_address, nso_size);
@@ -639,7 +657,7 @@ namespace ams::ldr {
             fssystem::DestroyExternalCode(loc.program_id);
 
             /* Note that we've created the program. */
-            SetLaunchedProgram(loc.program_id);
+            SetLaunchedBootProgram(loc.program_id);
 
             /* Move the process handle to output. */
             *out = info.process_handle.Move();

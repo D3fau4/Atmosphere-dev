@@ -59,6 +59,7 @@ namespace ams::kern::svc {
                 case ams::svc::InfoType_TotalNonSystemMemorySize:
                 case ams::svc::InfoType_UsedNonSystemMemorySize:
                 case ams::svc::InfoType_IsApplication:
+                case ams::svc::InfoType_FreeThreadCount:
                     {
                         /* These info types don't support non-zero subtypes. */
                         R_UNLESS(info_subtype == 0,  svc::ResultInvalidCombination());
@@ -124,6 +125,15 @@ namespace ams::kern::svc {
                                 break;
                             case ams::svc::InfoType_IsApplication:
                                 *out = process->IsApplication();
+                                break;
+                            case ams::svc::InfoType_FreeThreadCount:
+                                if (KResourceLimit *resource_limit = process->GetResourceLimit(); resource_limit != nullptr) {
+                                    const auto current_value = resource_limit->GetCurrentValue(ams::svc::LimitableResource_ThreadCountMax);
+                                    const auto limit_value   = resource_limit->GetLimitValue(ams::svc::LimitableResource_ThreadCountMax);
+                                    *out = limit_value - current_value;
+                                } else {
+                                    *out = 0;
+                                }
                                 break;
                             MESOSPHERE_UNREACHABLE_DEFAULT_CASE();
                         }
@@ -206,28 +216,35 @@ namespace ams::kern::svc {
                 case ams::svc::InfoType_ThreadTickCount:
                     {
                         /* Verify the requested core is valid. */
-                        const bool core_valid = (info_subtype == static_cast<u64>(-1ul)) || (info_subtype < cpu::NumCores);
+                        const bool core_valid = (info_subtype == static_cast<u64>(-1ul)) || (info_subtype < cpu::NumVirtualCores);
                         R_UNLESS(core_valid, svc::ResultInvalidCombination());
 
                         /* Get the thread from its handle. */
                         KScopedAutoObject thread = GetCurrentProcess().GetHandleTable().GetObject<KThread>(handle);
                         R_UNLESS(thread.IsNotNull(), svc::ResultInvalidHandle());
 
-                        /* Get the tick count. */
+                        /* Disable interrupts while we get the tick count. */
                         s64 tick_count;
-                        if (info_subtype == static_cast<u64>(-1ul)) {
-                            tick_count = thread->GetCpuTime();
-                            if (GetCurrentThreadPointer() == thread.GetPointerUnsafe()) {
-                                const s64 cur_tick    = KHardwareTimer::GetTick();
-                                const s64 prev_switch = Kernel::GetScheduler().GetLastContextSwitchTime();
-                                tick_count += (cur_tick - prev_switch);
-                            }
-                        } else {
-                            tick_count = thread->GetCpuTime(static_cast<s32>(info_subtype));
-                            if (GetCurrentThreadPointer() == thread.GetPointerUnsafe() && static_cast<s32>(info_subtype) == GetCurrentCoreId()) {
-                                const s64 cur_tick    = KHardwareTimer::GetTick();
-                                const s64 prev_switch = Kernel::GetScheduler().GetLastContextSwitchTime();
-                                tick_count += (cur_tick - prev_switch);
+                        {
+                            KScopedInterruptDisable di;
+
+                            if (info_subtype == static_cast<u64>(-1ul)) {
+                                tick_count = thread->GetCpuTime();
+                                if (GetCurrentThreadPointer() == thread.GetPointerUnsafe()) {
+                                    const s64 cur_tick    = KHardwareTimer::GetTick();
+                                    const s64 prev_switch = Kernel::GetScheduler().GetLastContextSwitchTime();
+                                    tick_count += (cur_tick - prev_switch);
+                                }
+                            } else {
+                                const s32 phys_core = cpu::VirtualToPhysicalCoreMap[info_subtype];
+                                MESOSPHERE_ABORT_UNLESS(phys_core < static_cast<s32>(cpu::NumCores));
+
+                                tick_count = thread->GetCpuTime(phys_core);
+                                if (GetCurrentThreadPointer() == thread.GetPointerUnsafe() && phys_core == GetCurrentCoreId()) {
+                                    const s64 cur_tick    = KHardwareTimer::GetTick();
+                                    const s64 prev_switch = Kernel::GetScheduler().GetLastContextSwitchTime();
+                                    tick_count += (cur_tick - prev_switch);
+                                }
                             }
                         }
 
@@ -257,6 +274,25 @@ namespace ams::kern::svc {
                             default:
                                 return svc::ResultInvalidCombination();
                         }
+                    }
+                    break;
+                case ams::svc::InfoType_MesosphereCurrentProcess:
+                    {
+                        /* Verify the input handle is invalid. */
+                        R_UNLESS(handle == ams::svc::InvalidHandle, svc::ResultInvalidHandle());
+
+                        /* Verify the sub-type is valid. */
+                        R_UNLESS(info_subtype == 0, svc::ResultInvalidCombination());
+
+                        /* Get the handle table. */
+                        KHandleTable &handle_table = GetCurrentProcess().GetHandleTable();
+
+                        /* Get a new handle for the current process. */
+                        ams::svc::Handle tmp;
+                        R_TRY(handle_table.Add(std::addressof(tmp), GetCurrentProcessPointer()));
+
+                        /* Set the output. */
+                        *out = tmp;
                     }
                     break;
                 default:

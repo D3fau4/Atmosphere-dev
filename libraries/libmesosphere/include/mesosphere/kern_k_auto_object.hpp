@@ -46,13 +46,13 @@ namespace ams::kern {
         protected:
             class TypeObj {
                 private:
-                    const char *name;
-                    ClassTokenType class_token;
+                    const char *m_name;
+                    ClassTokenType m_class_token;
                 public:
-                    constexpr explicit TypeObj(const char *n, ClassTokenType tok) : name(n), class_token(tok) { /* ... */ }
+                    constexpr explicit TypeObj(const char *n, ClassTokenType tok) : m_name(n), m_class_token(tok) { /* ... */ }
 
-                    constexpr ALWAYS_INLINE const char *GetName() const { return this->name; }
-                    constexpr ALWAYS_INLINE ClassTokenType GetClassToken() const { return this->class_token; }
+                    constexpr ALWAYS_INLINE const char *GetName() const { return m_name; }
+                    constexpr ALWAYS_INLINE ClassTokenType GetClassToken() const { return m_class_token; }
 
                     constexpr ALWAYS_INLINE bool operator==(const TypeObj &rhs) {
                         return this->GetClassToken() == rhs.GetClassToken();
@@ -69,11 +69,12 @@ namespace ams::kern {
         private:
             MESOSPHERE_AUTOOBJECT_TRAITS(KAutoObject, KAutoObject);
         private:
-            std::atomic<u32> ref_count;
+            KAutoObject *m_next_closed_object;
+            std::atomic<u32> m_ref_count;
         public:
             static KAutoObject *Create(KAutoObject *ptr);
         public:
-            constexpr ALWAYS_INLINE explicit KAutoObject() : ref_count(0) { MESOSPHERE_ASSERT_THIS(); }
+            constexpr ALWAYS_INLINE explicit KAutoObject() : m_next_closed_object(nullptr), m_ref_count(0) { MESOSPHERE_ASSERT_THIS(); }
             virtual ~KAutoObject() { MESOSPHERE_ASSERT_THIS(); }
 
             /* Destroy is responsible for destroying the auto object's resources when ref_count hits zero. */
@@ -85,7 +86,7 @@ namespace ams::kern {
             virtual KProcess *GetOwner() const { return nullptr; }
 
             u32 GetReferenceCount() const {
-                return this->ref_count;
+                return m_ref_count.load();
             }
 
             ALWAYS_INLINE bool IsDerivedFrom(const TypeObj &rhs) const {
@@ -120,36 +121,16 @@ namespace ams::kern {
                 }
             }
 
-            ALWAYS_INLINE bool Open() {
-                MESOSPHERE_ASSERT_THIS();
-
-                /* Atomically increment the reference count, only if it's positive. */
-                u32 cur_ref_count = this->ref_count.load(std::memory_order_acquire);
-                do {
-                    if (AMS_UNLIKELY(cur_ref_count == 0)) {
-                        MESOSPHERE_AUDIT(cur_ref_count != 0);
-                        return false;
-                    }
-                    MESOSPHERE_ABORT_UNLESS(cur_ref_count < cur_ref_count + 1);
-                } while (!this->ref_count.compare_exchange_weak(cur_ref_count, cur_ref_count + 1, std::memory_order_relaxed));
-
-                return true;
-            }
-
-            ALWAYS_INLINE void Close() {
-                MESOSPHERE_ASSERT_THIS();
-
-                /* Atomically decrement the reference count, not allowing it to become negative. */
-                u32 cur_ref_count = this->ref_count.load(std::memory_order_acquire);
-                do {
-                    MESOSPHERE_ABORT_UNLESS(cur_ref_count > 0);
-                } while (!this->ref_count.compare_exchange_weak(cur_ref_count, cur_ref_count - 1, std::memory_order_relaxed));
-
-                /* If ref count hits zero, destroy the object. */
-                if (cur_ref_count - 1 == 0) {
-                    this->Destroy();
-                }
-            }
+            bool Open();
+            void Close();
+        private:
+            /* NOTE: This has to be defined *after* KThread is defined. */
+            /* Nintendo seems to handle this by defining Open/Close() in a cpp, but we'd like them to remain in headers. */
+            /* Implementation for this will be inside kern_k_thread.hpp, so it can be ALWAYS_INLINE. */
+            void ScheduleDestruction();
+        public:
+            /* Getter, for KThread. */
+            ALWAYS_INLINE KAutoObject *GetNextClosedObject() { return m_next_closed_object; }
     };
 
     class KAutoObjectWithListContainer;
@@ -185,44 +166,44 @@ namespace ams::kern {
             template<typename U>
             friend class KScopedAutoObject;
         private:
-            T *obj;
+            T *m_obj;
         private:
             constexpr ALWAYS_INLINE void Swap(KScopedAutoObject &rhs) {
-                std::swap(this->obj, rhs.obj);
+                std::swap(m_obj, rhs.m_obj);
             }
         public:
-            constexpr ALWAYS_INLINE KScopedAutoObject() : obj(nullptr) { /* ... */ }
-            constexpr ALWAYS_INLINE KScopedAutoObject(T *o) : obj(o) {
-                if (this->obj != nullptr) {
-                    this->obj->Open();
+            constexpr ALWAYS_INLINE KScopedAutoObject() : m_obj(nullptr) { /* ... */ }
+            constexpr ALWAYS_INLINE KScopedAutoObject(T *o) : m_obj(o) {
+                if (m_obj != nullptr) {
+                    m_obj->Open();
                 }
             }
 
             ALWAYS_INLINE ~KScopedAutoObject() {
-                if (this->obj != nullptr) {
-                    this->obj->Close();
+                if (m_obj != nullptr) {
+                    m_obj->Close();
                 }
-                this->obj = nullptr;
+                m_obj = nullptr;
             }
 
             template<typename U> requires (std::derived_from<T, U> || std::derived_from<U, T>)
-            constexpr ALWAYS_INLINE KScopedAutoObject(KScopedAutoObject<U> &&rhs) {
+            constexpr KScopedAutoObject(KScopedAutoObject<U> &&rhs) {
                 if constexpr (std::derived_from<U, T>) {
                     /* Upcast. */
-                    this->obj = rhs.obj;
-                    rhs.obj = nullptr;
+                    m_obj = rhs.m_obj;
+                    rhs.m_obj = nullptr;
                 } else {
                     /* Downcast. */
                     T *derived = nullptr;
-                    if (rhs.obj != nullptr) {
-                        derived = rhs.obj->template DynamicCast<T *>();
+                    if (rhs.m_obj != nullptr) {
+                        derived = rhs.m_obj->template DynamicCast<T *>();
                         if (derived == nullptr) {
-                            rhs.obj->Close();
+                            rhs.m_obj->Close();
                         }
                     }
 
-                    this->obj = derived;
-                    rhs.obj = nullptr;
+                    m_obj = derived;
+                    rhs.m_obj = nullptr;
                 }
             }
 
@@ -231,19 +212,19 @@ namespace ams::kern {
                 return *this;
             }
 
-            constexpr ALWAYS_INLINE T *operator->() { return this->obj; }
-            constexpr ALWAYS_INLINE T &operator*() { return *this->obj; }
+            constexpr ALWAYS_INLINE T *operator->() { return m_obj; }
+            constexpr ALWAYS_INLINE T &operator*() { return *m_obj; }
 
             constexpr ALWAYS_INLINE void Reset(T *o) {
                 KScopedAutoObject(o).Swap(*this);
             }
 
-            constexpr ALWAYS_INLINE T *GetPointerUnsafe() { return this->obj; }
+            constexpr ALWAYS_INLINE T *GetPointerUnsafe() { return m_obj; }
 
-            constexpr ALWAYS_INLINE T *ReleasePointerUnsafe() { T *ret = this->obj; this->obj = nullptr; return ret; }
+            constexpr ALWAYS_INLINE T *ReleasePointerUnsafe() { T *ret = m_obj; m_obj = nullptr; return ret; }
 
-            constexpr ALWAYS_INLINE bool IsNull() const { return this->obj == nullptr; }
-            constexpr ALWAYS_INLINE bool IsNotNull() const { return this->obj != nullptr; }
+            constexpr ALWAYS_INLINE bool IsNull() const { return m_obj == nullptr; }
+            constexpr ALWAYS_INLINE bool IsNotNull() const { return m_obj != nullptr; }
     };
 
 

@@ -26,7 +26,7 @@ namespace ams::os {
             return GetReference(manager->impl_storage);
         }
 
-        ALWAYS_INLINE WaitableHolderType *ReinterpretAsWaitableHolder(impl::WaitableHolderBase *base) {
+        ALWAYS_INLINE WaitableHolderType *CastToWaitableHolder(impl::WaitableHolderBase *base) {
             return reinterpret_cast<WaitableHolderType *>(base);
         }
 
@@ -34,7 +34,7 @@ namespace ams::os {
 
     void InitializeWaitableManager(WaitableManagerType *manager) {
         /* Initialize storage. */
-        new (std::addressof(GetWaitableManagerImpl(manager))) impl::WaitableManagerImpl;
+        util::ConstructAt(manager->impl_storage);
 
         /* Mark initialized. */
         manager->state = WaitableManagerType::State_Initialized;
@@ -50,7 +50,7 @@ namespace ams::os {
         manager->state = WaitableManagerType::State_NotInitialized;
 
         /* Destroy. */
-        impl.~WaitableManagerImpl();
+        util::DestroyAt(manager->impl_storage);
     }
 
     WaitableHolderType *WaitAny(WaitableManagerType *manager) {
@@ -59,7 +59,7 @@ namespace ams::os {
         AMS_ASSERT(manager->state == WaitableManagerType::State_Initialized);
         AMS_ASSERT(!impl.IsEmpty());
 
-        auto *holder = ReinterpretAsWaitableHolder(impl.WaitAny());
+        auto *holder = CastToWaitableHolder(impl.WaitAny());
         AMS_ASSERT(holder != nullptr);
         return holder;
     }
@@ -70,7 +70,7 @@ namespace ams::os {
         AMS_ASSERT(manager->state == WaitableManagerType::State_Initialized);
         AMS_ASSERT(!impl.IsEmpty());
 
-        auto *holder = ReinterpretAsWaitableHolder(impl.TryWaitAny());
+        auto *holder = CastToWaitableHolder(impl.TryWaitAny());
         return holder;
     }
 
@@ -81,7 +81,7 @@ namespace ams::os {
         AMS_ASSERT(!impl.IsEmpty());
         AMS_ASSERT(timeout.GetNanoSeconds() >= 0);
 
-        auto *holder = ReinterpretAsWaitableHolder(impl.TimedWaitAny(timeout));
+        auto *holder = CastToWaitableHolder(impl.TimedWaitAny(timeout));
         return holder;
     }
 
@@ -90,7 +90,7 @@ namespace ams::os {
 
         AMS_ASSERT(!holder_base->IsLinkedToManager());
 
-        holder_base->~WaitableHolderBase();
+        std::destroy_at(holder_base);
     }
 
     void LinkWaitableHolder(WaitableManagerType *manager, WaitableHolderType *holder) {
@@ -143,7 +143,7 @@ namespace ams::os {
     void InitializeWaitableHolder(WaitableHolderType *holder, Handle handle) {
         AMS_ASSERT(handle != svc::InvalidHandle);
 
-        new (GetPointer(holder->impl_storage)) impl::WaitableHolderOfHandle(handle);
+        util::ConstructAt(GetReference(holder->impl_storage).holder_of_handle_storage, handle);
 
         holder->user_data = 0;
     }

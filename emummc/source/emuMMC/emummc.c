@@ -271,7 +271,7 @@ int sdmmc_nand_get_active_partition_index()
 
 static uint64_t emummc_read_write_inner(void *buf, unsigned int sector, unsigned int num_sectors, bool is_write)
 {
-    if ((emuMMC_ctx.EMMC_Type == emuMMC_SD))
+    if ((emuMMC_ctx.EMMC_Type == emuMMC_SD_Raw))
     {
         // raw partition sector offset: emuMMC_ctx.EMMC_StoragePartitionOffset.
         sector += emuMMC_ctx.EMMC_StoragePartitionOffset;
@@ -292,6 +292,36 @@ static uint64_t emummc_read_write_inner(void *buf, unsigned int sector, unsigned
         {
             fp = &f_emu.fp_gpp[sector / f_emu.part_size];
             sector = sector % f_emu.part_size;
+
+            // Special handling for reads/writes which cross file-boundaries.
+            if (__builtin_expect(sector + num_sectors > f_emu.part_size, 0))
+            {
+                unsigned int remaining = num_sectors;
+                while (remaining > 0) {
+                    const unsigned int cur_sectors = MIN(remaining, f_emu.part_size - sector);
+
+                    if (f_lseek(fp, sector << 9) != FR_OK)
+                        return 0; // Out of bounds.
+
+                    if (is_write)
+                    {
+                        if (f_write_fast(fp, buf, cur_sectors << 9) != FR_OK)
+                            return 0;
+                    }
+                    else
+                    {
+                        if (f_read_fast(fp, buf, cur_sectors << 9) != FR_OK)
+                            return 0;
+                    }
+
+                    buf = (char *)buf + (cur_sectors << 9);
+                    remaining -= cur_sectors;
+                    sector = 0;
+                    ++fp;
+                }
+
+                return 1;
+            }
         }
         else
         {
@@ -316,6 +346,31 @@ static uint64_t emummc_read_write_inner(void *buf, unsigned int sector, unsigned
         res = !f_write_fast(fp, buf, num_sectors << 9);
 
     return res;
+}
+
+// Controller open wrapper
+uint64_t sdmmc_wrapper_controller_open(int mmc_id)
+{
+    uint64_t result;
+    sdmmc_accessor_t *_this;
+    _this = sdmmc_accessor_get(mmc_id);
+
+    if (_this != NULL)
+    {
+        // Lock eMMC xfer while SD card is being initialized by FS.
+        if (mmc_id == FS_SDMMC_SD)
+            mutex_lock_handler(FS_SDMMC_EMMC); // Recursive Mutex, handler will lock SD as well if custom_driver
+
+        result = _this->vtab->sdmmc_accessor_controller_open(_this);
+
+        // Unlock eMMC.
+        if (mmc_id == FS_SDMMC_SD)
+            mutex_unlock_handler(FS_SDMMC_EMMC);
+
+        return result;
+    }
+
+    fatal_abort(Fatal_OpenAccessor);
 }
 
 // Controller close wrapper
@@ -389,7 +444,7 @@ uint64_t sdmmc_wrapper_read(void *buf, uint64_t bufSize, int mmc_id, unsigned in
             if (first_sd_read)
             {
                 first_sd_read = false;
-                if (emuMMC_ctx.EMMC_Type == emuMMC_SD)
+                if (emuMMC_ctx.EMMC_Type == emuMMC_SD_Raw)
                 {
                     // Because some SD cards have issues with emuMMC's driver
                     // we currently swap to FS's driver after first SD read
@@ -400,7 +455,7 @@ uint64_t sdmmc_wrapper_read(void *buf, uint64_t bufSize, int mmc_id, unsigned in
                 }
             }
 
-            // Call hekates driver.
+            // Call hekate's driver.
             if (sdmmc_storage_read(&sd_storage, sector, num_sectors, buf))
             {
                 mutex_unlock_handler(mmc_id);

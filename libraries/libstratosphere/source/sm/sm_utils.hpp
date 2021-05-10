@@ -21,20 +21,8 @@
 namespace ams::sm::impl {
 
     /* Utilities. */
-    os::Mutex &GetUserSessionMutex();
     os::Mutex &GetMitmAcknowledgementSessionMutex();
     os::Mutex &GetPerThreadSessionMutex();
-
-    template<typename F>
-    Result DoWithUserSession(F f) {
-        std::scoped_lock lk(GetUserSessionMutex());
-        {
-            R_ABORT_UNLESS(smInitialize());
-            ON_SCOPE_EXIT { smExit(); };
-
-            return f();
-        }
-    }
 
     template<typename F>
     Result DoWithMitmAcknowledgementSession(F f) {
@@ -49,7 +37,7 @@ namespace ams::sm::impl {
 
     template<typename F>
     Result DoWithPerThreadSession(F f) {
-        Service srv;
+        TipcService srv;
         {
             std::scoped_lock lk(GetPerThreadSessionMutex());
             R_ABORT_UNLESS(smAtmosphereOpenSession(&srv));

@@ -26,7 +26,7 @@ namespace ams::dmnt::cheat::impl {
         fs::FileHandle log_file;
         {
             char log_path[fs::EntryNameLengthMax + 1];
-            std::snprintf(log_path, sizeof(log_path), "sdmc:/atmosphere/cheat_vm_logs/%08x.log", log_id);
+            util::SNPrintf(log_path, sizeof(log_path), "sdmc:/atmosphere/cheat_vm_logs/%08x.log", log_id);
             if (R_FAILED(fs::OpenFile(std::addressof(log_file), log_path, fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
                 return;
             }
@@ -39,7 +39,7 @@ namespace ams::dmnt::cheat::impl {
         }
 
         char log_value[18];
-        std::snprintf(log_value, sizeof(log_value), "%016lx\n", value);
+        util::SNPrintf(log_value, sizeof(log_value), "%016lx\n", value);
         fs::WriteFile(log_file, log_offset, log_value, std::strlen(log_value), fs::WriteOption::Flush);
     }
 
@@ -69,7 +69,7 @@ namespace ams::dmnt::cheat::impl {
         {
             std::va_list vl;
             va_start(vl, format);
-            std::vsnprintf(this->debug_log_format_buf, sizeof(this->debug_log_format_buf) - 1, format, vl);
+            util::VSNPrintf(this->debug_log_format_buf, sizeof(this->debug_log_format_buf) - 1, format, vl);
             va_end(vl);
         }
 
@@ -284,6 +284,7 @@ namespace ams::dmnt::cheat::impl {
                         this->LogToDebugFile("O Reg Idx: %x\n", opcode->debug_log.ofs_reg_index);
                         break;
                 }
+                break;
             default:
                 this->LogToDebugFile("Unknown opcode: %x\n", opcode->opcode);
                 break;
@@ -381,7 +382,7 @@ namespace ams::dmnt::cheat::impl {
                     opcode.begin_cond.mem_type = (MemoryAccessType)((first_dword >> 20) & 0xF);
                     opcode.begin_cond.cond_type = (ConditionalComparisonType)((first_dword >> 16) & 0xF);
                     opcode.begin_cond.rel_address = ((u64)(first_dword & 0xFF) << 32ul) | ((u64)second_dword);
-                    opcode.begin_cond.value = GetNextVmInt(opcode.store_static.bit_width);
+                    opcode.begin_cond.value = GetNextVmInt(opcode.begin_cond.bit_width);
                 }
                 break;
             case CheatVmOpcodeType_EndConditionalBlock:

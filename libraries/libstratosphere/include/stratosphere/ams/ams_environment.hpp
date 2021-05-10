@@ -26,4 +26,11 @@ namespace ams {
     void InitializeForBoot();
     void SetInitialRebootPayload(const void *src, size_t src_size);
 
+    void *Malloc(size_t size);
+    void Free(void *ptr);
+
+    void *MallocForRapidJson(size_t size);
+    void *ReallocForRapidJson(void *ptr, size_t size);
+    void FreeForRapidJson(void *ptr);
+
 }

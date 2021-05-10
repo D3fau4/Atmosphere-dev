@@ -38,37 +38,67 @@ namespace ams::kern::arch::arm64::init {
         public:
             class IPageAllocator {
                 public:
-                    virtual KPhysicalAddress Allocate()           { return Null<KPhysicalAddress>; }
-                    virtual void Free(KPhysicalAddress phys_addr) { /* Nothing to do here. */ (void)(phys_addr); }
+                    virtual KPhysicalAddress Allocate(size_t size) = 0;
+                    virtual void Free(KPhysicalAddress phys_addr, size_t size) = 0;
             };
-
-            struct NoClear{};
         private:
-            KPhysicalAddress l1_table;
+            KPhysicalAddress m_l1_tables[2];
+            u32 m_num_entries[2];
+
         public:
-            constexpr ALWAYS_INLINE KInitialPageTable(KPhysicalAddress l1, NoClear) : l1_table(l1) { /* ... */ }
+            KInitialPageTable(KVirtualAddress start_address, KVirtualAddress end_address, IPageAllocator &allocator) {
+                /* Set tables. */
+                m_l1_tables[0] = AllocateNewPageTable(allocator);
+                m_l1_tables[1] = AllocateNewPageTable(allocator);
 
-            constexpr ALWAYS_INLINE KInitialPageTable(KPhysicalAddress l1) : KInitialPageTable(l1, NoClear{}) {
-                ClearNewPageTable(this->l1_table);
+                /* Set counts. */
+                m_num_entries[0] = MaxPageTableEntries;
+                m_num_entries[1] = ((end_address / L1BlockSize) & (MaxPageTableEntries - 1)) - ((start_address / L1BlockSize) & (MaxPageTableEntries - 1)) + 1;
             }
 
-            constexpr ALWAYS_INLINE uintptr_t GetL1TableAddress() const {
-                return GetInteger(this->l1_table);
+            KInitialPageTable() {
+                /* Set tables. */
+                m_l1_tables[0] = util::AlignDown(cpu::GetTtbr0El1(), PageSize);
+                m_l1_tables[1] = util::AlignDown(cpu::GetTtbr1El1(), PageSize);
+
+                /* Set counts. */
+                cpu::TranslationControlRegisterAccessor tcr;
+                m_num_entries[0] = tcr.GetT0Size() / L1BlockSize;
+                m_num_entries[1] = tcr.GetT1Size() / L1BlockSize;
+
+                /* Check counts. */
+                MESOSPHERE_INIT_ABORT_UNLESS(0 < m_num_entries[0] && m_num_entries[0] <= MaxPageTableEntries);
+                MESOSPHERE_INIT_ABORT_UNLESS(0 < m_num_entries[1] && m_num_entries[1] <= MaxPageTableEntries);
+            }
+
+            constexpr ALWAYS_INLINE uintptr_t GetTtbr0L1TableAddress() const {
+                return GetInteger(m_l1_tables[0]);
+            }
+
+            constexpr ALWAYS_INLINE uintptr_t GetTtbr1L1TableAddress() const {
+                return GetInteger(m_l1_tables[1]);
             }
         private:
-            static constexpr ALWAYS_INLINE L1PageTableEntry *GetL1Entry(KPhysicalAddress _l1_table, KVirtualAddress address) {
-                L1PageTableEntry *l1_table = reinterpret_cast<L1PageTableEntry *>(GetInteger(_l1_table));
-                return l1_table + ((GetInteger(address) >> 30) & (MaxPageTableEntries - 1));
+            constexpr ALWAYS_INLINE L1PageTableEntry *GetL1Entry(KVirtualAddress address) const {
+                const size_t index = (GetInteger(address) >> (BITSIZEOF(address) - 1)) & 1;
+                L1PageTableEntry *l1_table = reinterpret_cast<L1PageTableEntry *>(GetInteger(m_l1_tables[index]));
+                return l1_table + ((GetInteger(address) / L1BlockSize) & (m_num_entries[index] - 1));
             }
 
             static constexpr ALWAYS_INLINE L2PageTableEntry *GetL2Entry(const L1PageTableEntry *entry, KVirtualAddress address) {
                 L2PageTableEntry *l2_table = reinterpret_cast<L2PageTableEntry *>(GetInteger(entry->GetTable()));
-                return l2_table + ((GetInteger(address) >> 21) & (MaxPageTableEntries - 1));
+                return l2_table + ((GetInteger(address) / L2BlockSize) & (MaxPageTableEntries - 1));
             }
 
             static constexpr ALWAYS_INLINE L3PageTableEntry *GetL3Entry(const L2PageTableEntry *entry, KVirtualAddress address) {
                 L3PageTableEntry *l3_table = reinterpret_cast<L3PageTableEntry *>(GetInteger(entry->GetTable()));
-                return l3_table + ((GetInteger(address) >> 12) & (MaxPageTableEntries - 1));
+                return l3_table + ((GetInteger(address) / L3BlockSize) & (MaxPageTableEntries - 1));
+            }
+
+            static ALWAYS_INLINE KPhysicalAddress AllocateNewPageTable(IPageAllocator &allocator) {
+                auto address = allocator.Allocate(PageSize);
+                ClearNewPageTable(address);
+                return address;
             }
 
             static ALWAYS_INLINE void ClearNewPageTable(KPhysicalAddress address) {
@@ -83,7 +113,7 @@ namespace ams::kern::arch::arm64::init {
                 const KVirtualAddress end_virt_addr = virt_addr + size;
                 size_t count = 0;
                 while (virt_addr < end_virt_addr) {
-                    L1PageTableEntry *l1_entry = GetL1Entry(this->l1_table, virt_addr);
+                    L1PageTableEntry *l1_entry = this->GetL1Entry(virt_addr);
 
                     /* If an L1 block is mapped or we're empty, advance by L1BlockSize. */
                     if (l1_entry->IsBlock() || l1_entry->IsEmpty()) {
@@ -137,7 +167,7 @@ namespace ams::kern::arch::arm64::init {
                 const KVirtualAddress end_virt_addr = virt_addr + size;
                 size_t count = 0;
                 while (virt_addr < end_virt_addr) {
-                    L1PageTableEntry *l1_entry = GetL1Entry(this->l1_table, virt_addr);
+                    L1PageTableEntry *l1_entry = this->GetL1Entry(virt_addr);
 
                     /* If an L1 block is mapped or we're empty, advance by L1BlockSize. */
                     if (l1_entry->IsBlock() || l1_entry->IsEmpty()) {
@@ -194,7 +224,7 @@ namespace ams::kern::arch::arm64::init {
             }
 
             PageTableEntry *GetMappingEntry(KVirtualAddress virt_addr, size_t block_size) {
-                L1PageTableEntry *l1_entry = GetL1Entry(this->l1_table, virt_addr);
+                L1PageTableEntry *l1_entry = this->GetL1Entry(virt_addr);
 
                 if (l1_entry->IsBlock()) {
                     MESOSPHERE_INIT_ABORT_UNLESS(block_size == L1BlockSize);
@@ -301,11 +331,11 @@ namespace ams::kern::arch::arm64::init {
 
                 /* Iteratively map pages until the requested region is mapped. */
                 while (size > 0) {
-                    L1PageTableEntry *l1_entry = GetL1Entry(this->l1_table, virt_addr);
+                    L1PageTableEntry *l1_entry = this->GetL1Entry(virt_addr);
 
                     /* Can we make an L1 block? */
                     if (util::IsAligned(GetInteger(virt_addr), L1BlockSize) && util::IsAligned(GetInteger(phys_addr), L1BlockSize) && size >= L1BlockSize) {
-                        *l1_entry = L1PageTableEntry(PageTableEntry::BlockTag{}, phys_addr, attr, false);
+                        *l1_entry = L1PageTableEntry(PageTableEntry::BlockTag{}, phys_addr, attr, PageTableEntry::SoftwareReservedBit_None, false);
                         cpu::DataSynchronizationBarrierInnerShareable();
 
                         virt_addr += L1BlockSize;
@@ -316,7 +346,7 @@ namespace ams::kern::arch::arm64::init {
 
                     /* If we don't already have an L2 table, we need to make a new one. */
                     if (!l1_entry->IsTable()) {
-                        KPhysicalAddress new_table = allocator.Allocate();
+                        KPhysicalAddress new_table = AllocateNewPageTable(allocator);
                         ClearNewPageTable(new_table);
                         *l1_entry = L1PageTableEntry(PageTableEntry::TableTag{}, new_table, attr.IsPrivilegedExecuteNever());
                         cpu::DataSynchronizationBarrierInnerShareable();
@@ -327,7 +357,7 @@ namespace ams::kern::arch::arm64::init {
                     /* Can we make a contiguous L2 block? */
                     if (util::IsAligned(GetInteger(virt_addr), L2ContiguousBlockSize) && util::IsAligned(GetInteger(phys_addr), L2ContiguousBlockSize) && size >= L2ContiguousBlockSize) {
                         for (size_t i = 0; i < L2ContiguousBlockSize / L2BlockSize; i++) {
-                            l2_entry[i] = L2PageTableEntry(PageTableEntry::BlockTag{}, phys_addr, attr, true);
+                            l2_entry[i] = L2PageTableEntry(PageTableEntry::BlockTag{}, phys_addr, attr, PageTableEntry::SoftwareReservedBit_None, true);
                             cpu::DataSynchronizationBarrierInnerShareable();
 
                             virt_addr += L2BlockSize;
@@ -339,7 +369,7 @@ namespace ams::kern::arch::arm64::init {
 
                     /* Can we make an L2 block? */
                     if (util::IsAligned(GetInteger(virt_addr), L2BlockSize) && util::IsAligned(GetInteger(phys_addr), L2BlockSize) && size >= L2BlockSize) {
-                        *l2_entry = L2PageTableEntry(PageTableEntry::BlockTag{}, phys_addr, attr, false);
+                        *l2_entry = L2PageTableEntry(PageTableEntry::BlockTag{}, phys_addr, attr, PageTableEntry::SoftwareReservedBit_None, false);
                         cpu::DataSynchronizationBarrierInnerShareable();
 
                         virt_addr += L2BlockSize;
@@ -350,7 +380,7 @@ namespace ams::kern::arch::arm64::init {
 
                     /* If we don't already have an L3 table, we need to make a new one. */
                     if (!l2_entry->IsTable()) {
-                        KPhysicalAddress new_table = allocator.Allocate();
+                        KPhysicalAddress new_table = AllocateNewPageTable(allocator);
                         ClearNewPageTable(new_table);
                         *l2_entry = L2PageTableEntry(PageTableEntry::TableTag{}, new_table, attr.IsPrivilegedExecuteNever());
                         cpu::DataSynchronizationBarrierInnerShareable();
@@ -361,7 +391,7 @@ namespace ams::kern::arch::arm64::init {
                     /* Can we make a contiguous L3 block? */
                     if (util::IsAligned(GetInteger(virt_addr), L3ContiguousBlockSize) && util::IsAligned(GetInteger(phys_addr), L3ContiguousBlockSize) && size >= L3ContiguousBlockSize) {
                         for (size_t i = 0; i < L3ContiguousBlockSize / L3BlockSize; i++) {
-                            l3_entry[i] = L3PageTableEntry(PageTableEntry::BlockTag{}, phys_addr, attr, true);
+                            l3_entry[i] = L3PageTableEntry(PageTableEntry::BlockTag{}, phys_addr, attr, PageTableEntry::SoftwareReservedBit_None, true);
                             cpu::DataSynchronizationBarrierInnerShareable();
 
                             virt_addr += L3BlockSize;
@@ -372,7 +402,7 @@ namespace ams::kern::arch::arm64::init {
                     }
 
                     /* Make an L3 block. */
-                    *l3_entry = L3PageTableEntry(PageTableEntry::BlockTag{}, phys_addr, attr, false);
+                    *l3_entry = L3PageTableEntry(PageTableEntry::BlockTag{}, phys_addr, attr, PageTableEntry::SoftwareReservedBit_None, false);
                     cpu::DataSynchronizationBarrierInnerShareable();
                     virt_addr += L3BlockSize;
                     phys_addr += L3BlockSize;
@@ -382,7 +412,7 @@ namespace ams::kern::arch::arm64::init {
 
             KPhysicalAddress GetPhysicalAddress(KVirtualAddress virt_addr) const {
                 /* Get the L1 entry. */
-                const L1PageTableEntry *l1_entry = GetL1Entry(this->l1_table, virt_addr);
+                const L1PageTableEntry *l1_entry = this->GetL1Entry(virt_addr);
 
                 if (l1_entry->IsBlock()) {
                     return l1_entry->GetBlock() + (GetInteger(virt_addr) & (L1BlockSize - 1));
@@ -444,7 +474,7 @@ namespace ams::kern::arch::arm64::init {
                 };
 
                 while (virt_addr < end_virt_addr) {
-                    L1PageTableEntry *l1_entry = GetL1Entry(this->l1_table, virt_addr);
+                    L1PageTableEntry *l1_entry = this->GetL1Entry(virt_addr);
 
                     /* If an L1 block is mapped, update. */
                     if (l1_entry->IsBlock()) {
@@ -485,7 +515,7 @@ namespace ams::kern::arch::arm64::init {
 
                 const KVirtualAddress end_virt_addr = virt_addr + size;
                 while (virt_addr < end_virt_addr) {
-                    L1PageTableEntry *l1_entry = GetL1Entry(this->l1_table, virt_addr);
+                    L1PageTableEntry *l1_entry = this->GetL1Entry(virt_addr);
 
                     /* If an L1 block is mapped, the address isn't free. */
                     if (l1_entry->IsBlock()) {
@@ -534,7 +564,7 @@ namespace ams::kern::arch::arm64::init {
 
                 /* Iteratively reprotect pages until the requested region is reprotected. */
                 while (size > 0) {
-                    L1PageTableEntry *l1_entry = GetL1Entry(this->l1_table, virt_addr);
+                    L1PageTableEntry *l1_entry = this->GetL1Entry(virt_addr);
 
                     /* Check if an L1 block is present. */
                     if (l1_entry->IsBlock()) {
@@ -542,7 +572,7 @@ namespace ams::kern::arch::arm64::init {
                         const KPhysicalAddress block = l1_entry->GetBlock();
                         MESOSPHERE_INIT_ABORT_UNLESS(util::IsAligned(GetInteger(virt_addr), L1BlockSize));
                         MESOSPHERE_INIT_ABORT_UNLESS(size >= L1BlockSize);
-                        MESOSPHERE_INIT_ABORT_UNLESS(l1_entry->IsCompatibleWithAttribute(attr_before, false));
+                        MESOSPHERE_INIT_ABORT_UNLESS(l1_entry->IsCompatibleWithAttribute(attr_before, PageTableEntry::SoftwareReservedBit_None, false));
 
                         /* Invalidate the existing L1 block. */
                         *static_cast<PageTableEntry *>(l1_entry) = InvalidPageTableEntry;
@@ -550,7 +580,7 @@ namespace ams::kern::arch::arm64::init {
                         cpu::InvalidateEntireTlb();
 
                         /* Create new L1 block. */
-                        *l1_entry = L1PageTableEntry(PageTableEntry::BlockTag{}, block, attr_after, false);
+                        *l1_entry = L1PageTableEntry(PageTableEntry::BlockTag{}, block, attr_after, PageTableEntry::SoftwareReservedBit_None, false);
 
                         virt_addr += L1BlockSize;
                         size      -= L1BlockSize;
@@ -573,7 +603,7 @@ namespace ams::kern::arch::arm64::init {
                             /* Invalidate the existing contiguous L2 block. */
                             for (size_t i = 0; i < L2ContiguousBlockSize / L2BlockSize; i++) {
                                 /* Ensure that the entry is valid. */
-                                MESOSPHERE_INIT_ABORT_UNLESS(l2_entry[i].IsCompatibleWithAttribute(attr_before, true));
+                                MESOSPHERE_INIT_ABORT_UNLESS(l2_entry[i].IsCompatibleWithAttribute(attr_before, PageTableEntry::SoftwareReservedBit_None, true));
                                 static_cast<PageTableEntry *>(l2_entry)[i] = InvalidPageTableEntry;
                             }
                             cpu::DataSynchronizationBarrierInnerShareable();
@@ -581,7 +611,7 @@ namespace ams::kern::arch::arm64::init {
 
                             /* Create a new contiguous L2 block. */
                             for (size_t i = 0; i < L2ContiguousBlockSize / L2BlockSize; i++) {
-                                l2_entry[i] = L2PageTableEntry(PageTableEntry::BlockTag{}, block + L2BlockSize * i, attr_after, true);
+                                l2_entry[i] = L2PageTableEntry(PageTableEntry::BlockTag{}, block + L2BlockSize * i, attr_after, PageTableEntry::SoftwareReservedBit_None, true);
                             }
 
                             virt_addr += L2ContiguousBlockSize;
@@ -591,7 +621,7 @@ namespace ams::kern::arch::arm64::init {
                             MESOSPHERE_INIT_ABORT_UNLESS(util::IsAligned(GetInteger(virt_addr), L2BlockSize));
                             MESOSPHERE_INIT_ABORT_UNLESS(util::IsAligned(GetInteger(block),     L2BlockSize));
                             MESOSPHERE_INIT_ABORT_UNLESS(size >= L2BlockSize);
-                            MESOSPHERE_INIT_ABORT_UNLESS(l2_entry->IsCompatibleWithAttribute(attr_before, false));
+                            MESOSPHERE_INIT_ABORT_UNLESS(l2_entry->IsCompatibleWithAttribute(attr_before, PageTableEntry::SoftwareReservedBit_None, false));
 
                             /* Invalidate the existing L2 block. */
                             *static_cast<PageTableEntry *>(l2_entry) = InvalidPageTableEntry;
@@ -599,7 +629,7 @@ namespace ams::kern::arch::arm64::init {
                             cpu::InvalidateEntireTlb();
 
                             /* Create new L2 block. */
-                            *l2_entry = L2PageTableEntry(PageTableEntry::BlockTag{}, block, attr_after, false);
+                            *l2_entry = L2PageTableEntry(PageTableEntry::BlockTag{}, block, attr_after, PageTableEntry::SoftwareReservedBit_None, false);
 
                             virt_addr += L2BlockSize;
                             size      -= L2BlockSize;
@@ -625,7 +655,7 @@ namespace ams::kern::arch::arm64::init {
                         /* Invalidate the existing contiguous L3 block. */
                         for (size_t i = 0; i < L3ContiguousBlockSize / L3BlockSize; i++) {
                             /* Ensure that the entry is valid. */
-                            MESOSPHERE_INIT_ABORT_UNLESS(l3_entry[i].IsCompatibleWithAttribute(attr_before, true));
+                            MESOSPHERE_INIT_ABORT_UNLESS(l3_entry[i].IsCompatibleWithAttribute(attr_before, PageTableEntry::SoftwareReservedBit_None, true));
                             static_cast<PageTableEntry *>(l3_entry)[i] = InvalidPageTableEntry;
                         }
                         cpu::DataSynchronizationBarrierInnerShareable();
@@ -633,7 +663,7 @@ namespace ams::kern::arch::arm64::init {
 
                         /* Create a new contiguous L3 block. */
                         for (size_t i = 0; i < L3ContiguousBlockSize / L3BlockSize; i++) {
-                            l3_entry[i] = L3PageTableEntry(PageTableEntry::BlockTag{}, block + L3BlockSize * i, attr_after, true);
+                            l3_entry[i] = L3PageTableEntry(PageTableEntry::BlockTag{}, block + L3BlockSize * i, attr_after, PageTableEntry::SoftwareReservedBit_None, true);
                         }
 
                         virt_addr += L3ContiguousBlockSize;
@@ -643,7 +673,7 @@ namespace ams::kern::arch::arm64::init {
                         MESOSPHERE_INIT_ABORT_UNLESS(util::IsAligned(GetInteger(virt_addr), L3BlockSize));
                         MESOSPHERE_INIT_ABORT_UNLESS(util::IsAligned(GetInteger(block),     L3BlockSize));
                         MESOSPHERE_INIT_ABORT_UNLESS(size >= L3BlockSize);
-                        MESOSPHERE_INIT_ABORT_UNLESS(l3_entry->IsCompatibleWithAttribute(attr_before, false));
+                        MESOSPHERE_INIT_ABORT_UNLESS(l3_entry->IsCompatibleWithAttribute(attr_before, PageTableEntry::SoftwareReservedBit_None, false));
 
                         /* Invalidate the existing L3 block. */
                         *static_cast<PageTableEntry *>(l3_entry) = InvalidPageTableEntry;
@@ -651,7 +681,7 @@ namespace ams::kern::arch::arm64::init {
                         cpu::InvalidateEntireTlb();
 
                         /* Create new L3 block. */
-                        *l3_entry = L3PageTableEntry(PageTableEntry::BlockTag{}, block, attr_after, false);
+                        *l3_entry = L3PageTableEntry(PageTableEntry::BlockTag{}, block, attr_after, PageTableEntry::SoftwareReservedBit_None, false);
 
                         virt_addr += L3BlockSize;
                         size      -= L3BlockSize;
@@ -668,61 +698,170 @@ namespace ams::kern::arch::arm64::init {
                 this->PhysicallyRandomize(virt_addr, size, L2BlockSize, do_copy);
                 this->PhysicallyRandomize(virt_addr, size, L3ContiguousBlockSize, do_copy);
                 this->PhysicallyRandomize(virt_addr, size, L3BlockSize, do_copy);
+                cpu::StoreEntireCacheForInit();
             }
 
     };
 
-    class KInitialPageAllocator : public KInitialPageTable::IPageAllocator {
+    class KInitialPageAllocator final : public KInitialPageTable::IPageAllocator {
+        private:
+            static constexpr inline size_t FreeUnitSize = BITSIZEOF(u64) * PageSize;
+            struct FreeListEntry {
+                FreeListEntry *next;
+                size_t size;
+            };
         public:
             struct State {
-                uintptr_t next_address;
-                uintptr_t free_bitmap;
+                uintptr_t start_address;
+                uintptr_t end_address;
+                FreeListEntry *free_head;
             };
         private:
-            State state;
+            State m_state;
         public:
-            constexpr ALWAYS_INLINE KInitialPageAllocator() : state{} { /* ... */ }
+            constexpr ALWAYS_INLINE KInitialPageAllocator() : m_state{} { /* ... */ }
 
             ALWAYS_INLINE void Initialize(uintptr_t address) {
-                this->state.next_address = address + BITSIZEOF(this->state.free_bitmap) * PageSize;
-                this->state.free_bitmap  = ~uintptr_t();
+                m_state.start_address = address;
+                m_state.end_address  = address;
             }
 
             ALWAYS_INLINE void InitializeFromState(uintptr_t state_val) {
-                if (kern::GetTargetFirmware() >= ams::TargetFirmware_10_0_0) {
-                    this->state = *reinterpret_cast<State *>(state_val);
-                } else {
-                    this->state.next_address = state_val;
-                    this->state.free_bitmap  = 0;
-                }
+                m_state = *reinterpret_cast<State *>(state_val);
             }
 
             ALWAYS_INLINE void GetFinalState(State *out) {
-                *out = this->state;
-                this->state = {};
+                *out = m_state;
+                m_state = {};
             }
-        public:
-            virtual KPhysicalAddress Allocate() override {
-                MESOSPHERE_INIT_ABORT_UNLESS(this->state.next_address != Null<uintptr_t>);
-                uintptr_t allocated = this->state.next_address;
-                if (this->state.free_bitmap != 0) {
-                    u64 index;
-                    uintptr_t mask;
-                    do {
-                        index = KSystemControl::Init::GenerateRandomRange(0, BITSIZEOF(this->state.free_bitmap) - 1);
-                        mask  = (static_cast<uintptr_t>(1) << index);
-                    } while ((this->state.free_bitmap & mask) == 0);
-                    this->state.free_bitmap &= ~mask;
-                    allocated = this->state.next_address - ((BITSIZEOF(this->state.free_bitmap) - index) * PageSize);
-                } else {
-                    this->state.next_address += PageSize;
+        private:
+            bool CanAllocate(size_t align, size_t size) const {
+                for (auto *cur = m_state.free_head; cur != nullptr; cur = cur->next) {
+                    const uintptr_t cur_last   = reinterpret_cast<uintptr_t>(cur) + cur->size - 1;
+                    const uintptr_t alloc_last = util::AlignUp(reinterpret_cast<uintptr_t>(cur), align) + size - 1;
+                    if (alloc_last <= cur_last) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            bool TryAllocate(uintptr_t address, size_t size) {
+                /* Try to allocate the region. */
+                auto **prev_next = std::addressof(m_state.free_head);
+                for (auto *cur = m_state.free_head; cur != nullptr; prev_next = std::addressof(cur->next), cur = cur->next) {
+                    const uintptr_t cur_start = reinterpret_cast<uintptr_t>(cur);
+                    const uintptr_t cur_last  = cur_start + cur->size - 1;
+                    if (cur_start <= address && address + size - 1 <= cur_last) {
+                        auto *alloc = reinterpret_cast<FreeListEntry *>(address);
+
+                        /* Perform fragmentation at front. */
+                        if (cur != alloc) {
+                            prev_next = std::addressof(cur->next);
+                            *alloc = {
+                                .next = cur->next,
+                                .size = cur_start + cur->size - address,
+                            };
+                            *cur = {
+                                .next = alloc,
+                                .size = address - cur_start,
+                            };
+                        }
+
+                        /* Perform fragmentation at tail. */
+                        if (alloc->size != size) {
+                            auto *next = reinterpret_cast<FreeListEntry *>(address + size);
+                            *next = {
+                                .next = alloc->next,
+                                .size = alloc->size - size,
+                            };
+                            *alloc = {
+                                .next = next,
+                                .size = size,
+                            };
+                        }
+
+                        *prev_next = alloc->next;
+                        return true;
+                    }
                 }
 
-                ClearPhysicalMemory(allocated, PageSize);
-                return allocated;
+                return false;
+            }
+        public:
+            KPhysicalAddress Allocate(size_t align, size_t size) {
+                /* Ensure that the free list is non-empty. */
+                while (!this->CanAllocate(align, size)) {
+                    this->Free(m_state.end_address, FreeUnitSize);
+                    m_state.end_address += FreeUnitSize;
+                }
+
+                /* Allocate a random address. */
+                const uintptr_t aligned_start = util::AlignUp(m_state.start_address, align);
+                const uintptr_t aligned_end   = util::AlignDown(m_state.end_address, align);
+                const size_t ind_max = ((aligned_end - aligned_start) / align) - 1;
+                while (true) {
+                    if (const uintptr_t random_address = aligned_start + (KSystemControl::Init::GenerateRandomRange(0, ind_max) * align); this->TryAllocate(random_address, size)) {
+                        return random_address;
+                    }
+                }
             }
 
-            /* No need to override free. The default does nothing, and so would we. */
+            virtual KPhysicalAddress Allocate(size_t size) override {
+                return this->Allocate(size, size);
+            }
+
+            virtual void Free(KPhysicalAddress phys_addr, size_t size) override {
+                auto **prev_next = std::addressof(m_state.free_head);
+                auto *new_chunk  = reinterpret_cast<FreeListEntry *>(GetInteger(phys_addr));
+                if (auto *cur = m_state.free_head; cur != nullptr) {
+                    const uintptr_t new_start = reinterpret_cast<uintptr_t>(new_chunk);
+                    const uintptr_t new_end   = GetInteger(phys_addr) + size;
+                    while (true) {
+                        /* Attempt coalescing. */
+                        const uintptr_t cur_start = reinterpret_cast<uintptr_t>(cur);
+                        const uintptr_t cur_end   = cur_start + cur->size;
+                        if (new_start < new_end) {
+                            if (new_end < cur_start) {
+                                *new_chunk = {
+                                    .next = cur,
+                                    .size = size,
+                                };
+                                break;
+                            } else if (new_end == cur_start) {
+                                *new_chunk = {
+                                    .next = cur->next,
+                                    .size = cur->size + size,
+                                };
+                                break;
+                            }
+                        } else if (cur_end == new_start) {
+                            cur->size += size;
+                            return;
+                        }
+
+                        prev_next = std::addressof(cur->next);
+                        if (cur->next != nullptr) {
+                            cur = cur->next;
+                        } else {
+                            *new_chunk = {
+                                .next = nullptr,
+                                .size = size,
+                            };
+                            cur->next = new_chunk;
+                            return;
+                        }
+                    }
+
+                } else {
+                    *new_chunk = {
+                        .next = nullptr,
+                        .size = size,
+                    };
+                }
+
+                *prev_next = new_chunk;
+            }
     };
 
 }

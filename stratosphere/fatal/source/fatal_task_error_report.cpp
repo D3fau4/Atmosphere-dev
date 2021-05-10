@@ -41,8 +41,12 @@ namespace ams::fatal::srv {
 
             /* Try to get the current time. */
             {
-                sm::ScopedServiceHolder<timeInitialize, timeExit> time_holder;
-                return time_holder && R_SUCCEEDED(timeGetCurrentTime(TimeType_LocalSystemClock, out));
+                if (R_FAILED(::timeInitialize())) {
+                    return false;
+                }
+                ON_SCOPE_EXIT { ::timeExit(); };
+
+                return R_SUCCEEDED(::timeGetCurrentTime(TimeType_LocalSystemClock, out));
             }
         }
 
@@ -75,7 +79,7 @@ namespace ams::fatal::srv {
 
             /* Open report file. */
             {
-                std::snprintf(file_path, sizeof(file_path) - 1, "sdmc:/atmosphere/fatal_reports/%011lu_%016lx.log", timestamp, static_cast<u64>(this->context->program_id));
+                util::SNPrintf(file_path, sizeof(file_path) - 1, "sdmc:/atmosphere/fatal_reports/%011lu_%016lx.log", timestamp, static_cast<u64>(this->context->program_id));
                 ScopedFile file(file_path);
                 if (file.IsOpen()) {
                     file.WriteFormat("Atmosphère Fatal Report (v1.1):\n");
@@ -137,7 +141,7 @@ namespace ams::fatal::srv {
 
             /* Dump data to file. */
             {
-                std::snprintf(file_path, sizeof(file_path) - 1, "sdmc:/atmosphere/fatal_reports/dumps/%011lu_%016lx.bin", timestamp, static_cast<u64>(this->context->program_id));
+                util::SNPrintf(file_path, sizeof(file_path) - 1, "sdmc:/atmosphere/fatal_reports/dumps/%011lu_%016lx.bin", timestamp, static_cast<u64>(this->context->program_id));
                 ScopedFile file(file_path);
                 if (file.IsOpen()) {
                     file.Write(this->context->tls_dump, sizeof(this->context->tls_dump));

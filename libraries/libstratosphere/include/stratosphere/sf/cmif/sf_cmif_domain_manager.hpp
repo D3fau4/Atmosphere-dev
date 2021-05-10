@@ -15,9 +15,10 @@
  */
 
 #pragma once
-#include "../sf_common.hpp"
-#include "sf_cmif_domain_api.hpp"
-#include "sf_cmif_domain_service_object.hpp"
+#include <stratosphere/sf/sf_common.hpp>
+#include <stratosphere/sf/cmif/sf_cmif_domain_api.hpp>
+#include <stratosphere/sf/cmif/sf_cmif_domain_service_object.hpp>
+#include <stratosphere/sf/impl/sf_service_object_impl.hpp>
 
 namespace ams::sf::cmif {
 
@@ -39,7 +40,7 @@ namespace ams::sf::cmif {
                 explicit Entry() : owner(nullptr) { /* ... */ }
             };
 
-            class Domain final : public DomainServiceObject {
+            class Domain final : public DomainServiceObject, private sf::impl::ServiceObjectImplBase2 {
                 NON_COPYABLE(Domain);
                 NON_MOVEABLE(Domain);
                 private:
@@ -51,7 +52,17 @@ namespace ams::sf::cmif {
                     explicit Domain(ServerDomainManager *m) : manager(m) { /* ... */ }
                     ~Domain();
 
-                    void DestroySelf();
+                    void DisposeImpl();
+
+                    virtual void AddReference() {
+                        ServiceObjectImplBase2::AddReferenceImpl();
+                    }
+
+                    virtual void Release() {
+                        if (ServiceObjectImplBase2::ReleaseImpl()) {
+                            this->DisposeImpl();
+                        }
+                    }
 
                     virtual ServerDomainBase *GetServerDomain() override final {
                         return static_cast<ServerDomainBase *>(this);
@@ -66,8 +77,8 @@ namespace ams::sf::cmif {
                     virtual ServiceObjectHolder GetObject(DomainObjectId id) override final;
             };
         public:
-            using DomainEntryStorage  = TYPED_STORAGE(Entry);
-            using DomainStorage = TYPED_STORAGE(Domain);
+            using DomainEntryStorage  = util::TypedStorage<Entry>;
+            using DomainStorage       = util::TypedStorage<Domain>;
         private:
             class EntryManager {
                 private:
@@ -116,11 +127,12 @@ namespace ams::sf::cmif {
                 if (storage == nullptr) {
                     return nullptr;
                 }
-                return new (storage) Domain(this);
+
+                return std::construct_at(static_cast<Domain *>(storage), this);
             }
         public:
             static void DestroyDomainServiceObject(DomainServiceObject *obj) {
-                static_cast<Domain *>(obj)->DestroySelf();
+                static_cast<Domain *>(obj)->DisposeImpl();
             }
     };
 

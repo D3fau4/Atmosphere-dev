@@ -24,11 +24,11 @@ namespace ams::os::impl {
 
     void SetupThreadObjectUnsafe(ThreadType *thread, ThreadImpl *thread_impl, ThreadFunction function, void *arg, void *stack, size_t stack_size, s32 priority) {
         /* Setup objects. */
-        new (GetPointer(thread->cs_thread)) impl::InternalCriticalSection;
-        new (GetPointer(thread->cv_thread)) impl::InternalConditionVariable;
+        util::ConstructAt(thread->cs_thread);
+        util::ConstructAt(thread->cv_thread);
 
-        new (GetPointer(thread->all_threads_node)) util::IntrusiveListNode;
-        new (GetPointer(thread->waitlist))         WaitableObjectList;
+        util::ConstructAt(thread->all_threads_node);
+        util::ConstructAt(thread->waitlist);
 
         /* Set member variables. */
         thread->thread_impl    = (thread_impl != nullptr) ? thread_impl : std::addressof(thread->thread_impl_storage);
@@ -55,14 +55,14 @@ namespace ams::os::impl {
         manager.NotifyThreadNameChanged(thread);
 
         {
-            std::unique_lock lk(GetReference(thread->cs_thread));
+            GetReference(thread->cs_thread).Lock();
             while (thread->state == ThreadType::State_Initialized) {
                 GetReference(thread->cv_thread).Wait(GetPointer(thread->cs_thread));
             }
+            const auto new_state = thread->state;
+            GetReference(thread->cs_thread).Unlock();
 
-            if (thread->state == ThreadType::State_Started) {
-                lk.unlock();
-
+            if (new_state == ThreadType::State_Started) {
                 thread->function(thread->argument);
             }
         }
@@ -131,7 +131,7 @@ namespace ams::os::impl {
 
             thread->state = ThreadType::State_NotInitialized;
 
-            GetReference(thread->waitlist).~WaitableObjectList();
+            util::DestroyAt(thread->waitlist);
 
             thread->name_buffer[0] = '\x00';
 
@@ -220,7 +220,7 @@ namespace ams::os::impl {
             constexpr size_t ThreadNamePrefixSize = sizeof(ThreadNamePrefix) - 1;
             const u64 func = reinterpret_cast<u64>(thread->function);
             static_assert(ThreadNamePrefixSize + sizeof(func) * 2 + 1 <= sizeof(thread->name_buffer));
-            std::snprintf(thread->name_buffer, sizeof(thread->name_buffer), "%s%016lX", ThreadNamePrefix, func);
+            util::SNPrintf(thread->name_buffer, sizeof(thread->name_buffer), "%s%016lX", ThreadNamePrefix, func);
         }
 
         thread->name_pointer = thread->name_buffer;

@@ -20,6 +20,53 @@ namespace ams::fs {
 
     namespace {
 
+        constinit os::SdkMutex g_mount_stratosphere_romfs_lock;
+        constinit bool g_mounted_stratosphere_romfs = false;
+
+        constinit util::TypedStorage<FileHandleStorage> g_stratosphere_romfs_storage = {};
+        constinit util::TypedStorage<RomFsFileSystem> g_stratosphere_romfs_fs = {};
+
+        Result EnsureStratosphereRomfsMounted() {
+            std::scoped_lock lk(g_mount_stratosphere_romfs_lock);
+
+            if (AMS_UNLIKELY(!g_mounted_stratosphere_romfs)) {
+                /* Mount the SD card. */
+                R_TRY(fs::MountSdCard("#strat-romfs-sd"));
+                auto sd_guard = SCOPE_GUARD { fs::Unmount("#strat-romfs-sd"); };
+
+                /* Open sd:/atmosphere/stratosphere.romfs. */
+                fs::FileHandle stratosphere_romfs_file;
+                R_TRY(fs::OpenFile(std::addressof(stratosphere_romfs_file), "#strat-romfs-sd:/atmosphere/stratosphere.romfs", fs::OpenMode_Read));
+
+                /* Setup the storage. */
+                /* NOTE: This owns the file, and so on failure it will be closed appropriately. */
+                auto storage_guard = util::ConstructAtGuarded(g_stratosphere_romfs_storage, stratosphere_romfs_file, true);
+
+                /* Create the filesystem. */
+                auto fs_guard = util::ConstructAtGuarded(g_stratosphere_romfs_fs);
+
+                /* Initialize the filesystem. */
+                R_TRY(GetReference(g_stratosphere_romfs_fs).Initialize(GetPointer(g_stratosphere_romfs_storage), nullptr, 0, false));
+
+                /* We succeeded, and so stratosphere.romfs is mounted. */
+                fs_guard.Cancel();
+                storage_guard.Cancel();
+                sd_guard.Cancel();
+
+                g_mounted_stratosphere_romfs = true;
+            }
+
+            return ResultSuccess();
+        }
+
+        fsa::IFileSystem &GetStratosphereRomFsFileSystem() {
+            /* Ensure that stratosphere.romfs is mounted. */
+            /* NOTE: Abort is used here to ensure that atmosphere's filesystem is structurally valid. */
+            R_ABORT_UNLESS(EnsureStratosphereRomfsMounted());
+
+            return GetReference(g_stratosphere_romfs_fs);
+        }
+
         Result OpenCodeFileSystemImpl(CodeVerificationData *out_verification_data, std::unique_ptr<fsa::IFileSystem> *out, const char *path, ncm::ProgramId program_id) {
             /* Print a path suitable for the remote service. */
             fssrv::sf::Path sf_path;
@@ -62,9 +109,45 @@ namespace ams::fs {
             return OpenPackageFileSystemImpl(out, sf_path.str);
         }
 
-        Result OpenSdCardCodeOrCodeFileSystemImpl(CodeVerificationData *out_verification_data, std::unique_ptr<fsa::IFileSystem> *out, const char *path, ncm::ProgramId program_id) {
+        Result OpenStratosphereCodeFileSystemImpl(std::unique_ptr<fsa::IFileSystem> *out, ncm::ProgramId program_id) {
+            /* Ensure we don't access the SD card too early. */
+            R_UNLESS(cfg::IsSdCardInitialized(), fs::ResultSdCardNotPresent());
+
+            /* Open the program's package. */
+            std::unique_ptr<fsa::IFile> package_file;
+            {
+                /* Get the stratosphere.romfs filesystem. */
+                auto &romfs_fs = GetStratosphereRomFsFileSystem();
+
+                /* Print a path to the program's package. */
+                fssrv::sf::Path sf_path;
+                R_TRY(FspPathPrintf(std::addressof(sf_path), "/atmosphere/contents/%016lX/exefs.nsp", program_id.value));
+
+                /* Open the package within stratosphere.romfs. */
+                R_TRY(romfs_fs.OpenFile(std::addressof(package_file), sf_path.str, fs::OpenMode_Read));
+            }
+
+            /* Create a file storage for the program's package. */
+            auto package_storage = std::make_shared<FileStorage>(std::move(package_file));
+            R_UNLESS(package_storage != nullptr, fs::ResultAllocationFailureInCodeA());
+
+            /* Create a partition filesystem. */
+            auto package_fs = std::make_unique<fssystem::PartitionFileSystem>();
+            R_UNLESS(package_fs != nullptr, fs::ResultAllocationFailureInCodeA());
+
+            /* Initialize the partition filesystem. */
+            R_TRY(package_fs->Initialize(package_storage));
+
+            *out = std::move(package_fs);
+            return ResultSuccess();
+        }
+
+        Result OpenSdCardCodeOrStratosphereCodeOrCodeFileSystemImpl(CodeVerificationData *out_verification_data, std::unique_ptr<fsa::IFileSystem> *out, const char *path, ncm::ProgramId program_id) {
             /* If we can open an sd card code fs, use it. */
             R_SUCCEED_IF(R_SUCCEEDED(OpenSdCardCodeFileSystemImpl(out, program_id)));
+
+            /* If we can open a stratosphere code fs, use it. */
+            R_SUCCEED_IF(R_SUCCEEDED(OpenStratosphereCodeFileSystemImpl(out, program_id)));
 
             /* Otherwise, fall back to a normal code fs. */
             return OpenCodeFileSystemImpl(out_verification_data, out, path, program_id);
@@ -96,59 +179,59 @@ namespace ams::fs {
 
         class OpenFileOnlyFileSystem : public fsa::IFileSystem, public impl::Newable {
             private:
-                virtual Result CommitImpl() override final {
+                virtual Result DoCommit() override final {
                     return ResultSuccess();
                 }
 
-                virtual Result OpenDirectoryImpl(std::unique_ptr<fsa::IDirectory> *out_dir, const char *path, OpenDirectoryMode mode) override final {
+                virtual Result DoOpenDirectory(std::unique_ptr<fsa::IDirectory> *out_dir, const char *path, OpenDirectoryMode mode) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result GetEntryTypeImpl(DirectoryEntryType *out, const char *path) override final {
+                virtual Result DoGetEntryType(DirectoryEntryType *out, const char *path) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result CreateFileImpl(const char *path, s64 size, int flags) override final {
+                virtual Result DoCreateFile(const char *path, s64 size, int flags) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result DeleteFileImpl(const char *path) override final {
+                virtual Result DoDeleteFile(const char *path) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result CreateDirectoryImpl(const char *path) override final {
+                virtual Result DoCreateDirectory(const char *path) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result DeleteDirectoryImpl(const char *path) override final {
+                virtual Result DoDeleteDirectory(const char *path) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result DeleteDirectoryRecursivelyImpl(const char *path) override final {
+                virtual Result DoDeleteDirectoryRecursively(const char *path) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result RenameFileImpl(const char *old_path, const char *new_path) override final {
+                virtual Result DoRenameFile(const char *old_path, const char *new_path) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result RenameDirectoryImpl(const char *old_path, const char *new_path) override final {
+                virtual Result DoRenameDirectory(const char *old_path, const char *new_path) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result CleanDirectoryRecursivelyImpl(const char *path) override final {
+                virtual Result DoCleanDirectoryRecursively(const char *path) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result GetFreeSpaceSizeImpl(s64 *out, const char *path) override final {
+                virtual Result DoGetFreeSpaceSize(s64 *out, const char *path) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result GetTotalSpaceSizeImpl(s64 *out, const char *path) override final {
+                virtual Result DoGetTotalSpaceSize(s64 *out, const char *path) override final {
                     return fs::ResultUnsupportedOperation();
                 }
 
-                virtual Result CommitProvisionallyImpl(s64 counter) override final {
+                virtual Result DoCommitProvisionally(s64 counter) override final {
                     return fs::ResultUnsupportedOperation();
                 }
         };
@@ -172,7 +255,7 @@ namespace ams::fs {
 
                     /* Create a redirection filesystem to the relevant content folder. */
                     char path[fs::EntryNameLengthMax + 1];
-                    std::snprintf(path, sizeof(path), "/atmosphere/contents/%016lx/exefs", program_id.value);
+                    util::SNPrintf(path, sizeof(path), "/atmosphere/contents/%016lx/exefs", program_id.value);
 
                     auto subdir_fs = std::make_unique<fssystem::SubDirectoryFileSystem>(std::move(sd_fs), path);
                     if (subdir_fs == nullptr) {
@@ -190,7 +273,7 @@ namespace ams::fs {
 
                     /* Create a path representing the stub. */
                     char stub_path[fs::EntryNameLengthMax + 1];
-                    std::snprintf(stub_path, sizeof(stub_path), "%s.stub", path);
+                    util::SNPrintf(stub_path, sizeof(stub_path), "%s.stub", path);
 
                     /* Query whether we have the file. */
                     bool has_file;
@@ -201,7 +284,7 @@ namespace ams::fs {
                     return has_file;
                 }
 
-                virtual Result OpenFileImpl(std::unique_ptr<fsa::IFile> *out_file, const char *path, OpenMode mode) override final {
+                virtual Result DoOpenFile(std::unique_ptr<fsa::IFile> *out_file, const char *path, OpenMode mode) override final {
                     /* Only allow opening files with mode = read. */
                     R_UNLESS((mode & fs::OpenMode_All) == fs::OpenMode_Read, fs::ResultInvalidOpenMode());
 
@@ -239,7 +322,7 @@ namespace ams::fs {
 
                     /* Open the code filesystem. */
                     std::unique_ptr<fsa::IFileSystem> fsa;
-                    R_TRY(OpenSdCardCodeOrCodeFileSystemImpl(out_verification_data, std::addressof(fsa), path, program_id));
+                    R_TRY(OpenSdCardCodeOrStratosphereCodeOrCodeFileSystemImpl(out_verification_data, std::addressof(fsa), path, program_id));
                     this->code_fs.emplace(std::move(fsa), program_id, is_specific);
 
                     this->program_id = program_id;
@@ -248,7 +331,7 @@ namespace ams::fs {
                     return ResultSuccess();
                 }
             private:
-                virtual Result OpenFileImpl(std::unique_ptr<fsa::IFile> *out_file, const char *path, OpenMode mode) override final {
+                virtual Result DoOpenFile(std::unique_ptr<fsa::IFile> *out_file, const char *path, OpenMode mode) override final {
                     /* Ensure that we're initialized. */
                     R_UNLESS(this->initialized, fs::ResultNotInitialized());
 
@@ -326,7 +409,7 @@ namespace ams::fs {
 
         /* Open the code file system. */
         std::unique_ptr<fsa::IFileSystem> fsa;
-        R_TRY(OpenSdCardCodeOrCodeFileSystemImpl(out, std::addressof(fsa), path, program_id));
+        R_TRY(OpenSdCardCodeOrStratosphereCodeOrCodeFileSystemImpl(out, std::addressof(fsa), path, program_id));
 
         /* Create a wrapper fs. */
         auto wrap_fsa = std::make_unique<SdCardRedirectionCodeFileSystem>(std::move(fsa), program_id, false);

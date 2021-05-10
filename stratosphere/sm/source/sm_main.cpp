@@ -14,21 +14,22 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <stratosphere.hpp>
-#include "sm_user_service.hpp"
-#include "sm_manager_service.hpp"
-#include "sm_debug_monitor_service.hpp"
-#include "impl/sm_service_manager.hpp"
+#include "sm_tipc_server.hpp"
 
 extern "C" {
     extern u32 __start__;
 
+    extern int __system_argc;
+    extern char** __system_argv;
+
     u32 __nx_applet_type = AppletType_None;
 
-    #define INNER_HEAP_SIZE 0x4000
+    #define INNER_HEAP_SIZE 0x0
     size_t nx_inner_heap_size = INNER_HEAP_SIZE;
     char   nx_inner_heap[INNER_HEAP_SIZE];
 
     void __libnx_initheap(void);
+    void argvSetup(void);
     void __appInit(void);
     void __appExit(void);
 
@@ -37,16 +38,23 @@ extern "C" {
     u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
     void __libnx_exception_handler(ThreadExceptionDump *ctx);
 
+    void *__libnx_alloc(size_t size);
+    void *__libnx_aligned_alloc(size_t alignment, size_t size);
+    void __libnx_free(void *mem);
+}
+
+namespace {
+
+    constinit char *g_empty_argv = nullptr;
+
 }
 
 namespace ams {
 
     ncm::ProgramId CurrentProgramId = ncm::SystemProgramId::Sm;
 
-    namespace result {
-
-        bool CallFatalOnResultAssertion = false;
-
+    void NORETURN Exit(int rc) {
+        AMS_ABORT("Exit called by immortal process");
     }
 
 }
@@ -70,6 +78,12 @@ void __libnx_initheap(void) {
     fake_heap_end   = (char*)addr + size;
 }
 
+void argvSetup(void) {
+    /* We don't need argc/argv, so set them to empty defaults. */
+    __system_argc = 0;
+    __system_argv = std::addressof(g_empty_argv);
+}
+
 void __appInit(void) {
     hos::InitializeForStratosphere();
 
@@ -80,12 +94,24 @@ void __appExit(void) {
     /* Nothing to clean up, because we're sm. */
 }
 
-namespace {
+void *operator new(size_t size) {
+    AMS_ABORT("operator new(size_t) was called");
+}
 
-    /* sm:m, sm:, sm:dmnt. */
-    constexpr size_t NumServers  = 3;
-    sf::hipc::ServerManager<NumServers> g_server_manager;
+void operator delete(void *p) {
+    AMS_ABORT("operator delete(void *) was called");
+}
 
+void *__libnx_alloc(size_t size) {
+    AMS_ABORT("__libnx_alloc was called");
+}
+
+void *__libnx_aligned_alloc(size_t alignment, size_t size) {
+    AMS_ABORT("__libnx_aligned_alloc was called");
+}
+
+void __libnx_free(void *mem) {
+    AMS_ABORT("__libnx_free was called");
 }
 
 int main(int argc, char **argv)
@@ -94,36 +120,12 @@ int main(int argc, char **argv)
     os::SetThreadNamePointer(os::GetCurrentThread(), AMS_GET_SYSTEM_THREAD_NAME(sm, Main));
     AMS_ASSERT(os::GetThreadPriority(os::GetCurrentThread()) == AMS_GET_SYSTEM_THREAD_PRIORITY(sm, Main));
 
-    /* NOTE: These handles are manually managed, but we don't save references to them to close on exit. */
-    /* This is fine, because if SM crashes we have much bigger issues. */
+    /* Initialize the server. */
+    sm::InitializeTipcServer();
 
-    /* Create sm:, (and thus allow things to register to it). */
-    {
-        Handle sm_h;
-        R_ABORT_UNLESS(svcManageNamedPort(&sm_h, "sm:", 0x40));
-        g_server_manager.RegisterServer<sm::impl::IUserInterface, sm::UserService>(sm_h);
-    }
+    /* Loop forever, processing our services. */
+    sm::LoopProcessTipcServer();
 
-    /* Create sm:m manually. */
-    {
-        Handle smm_h;
-        R_ABORT_UNLESS(sm::impl::RegisterServiceForSelf(&smm_h, sm::ServiceName::Encode("sm:m"), 1));
-        g_server_manager.RegisterServer<sm::impl::IManagerInterface, sm::ManagerService>(smm_h);
-    }
-
-    /*===== ATMOSPHERE EXTENSION =====*/
-    /* Create sm:dmnt manually. */
-    {
-        Handle smdmnt_h;
-        R_ABORT_UNLESS(sm::impl::RegisterServiceForSelf(&smdmnt_h, sm::ServiceName::Encode("sm:dmnt"), 1));
-        g_server_manager.RegisterServer<sm::impl::IDebugMonitorInterface, sm::DebugMonitorService>(smdmnt_h);
-    }
-
-    /*================================*/
-
-    /* Loop forever, servicing our services. */
-    g_server_manager.LoopProcess();
-
-    /* Cleanup. */
-    return 0;
+    /* This can never be reached. */
+    AMS_ASSUME(false);
 }

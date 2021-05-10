@@ -41,8 +41,12 @@ namespace ams::creport {
 
             /* Try to get the current time. */
             {
-                sm::ScopedServiceHolder<timeInitialize, timeExit> time_holder;
-                return time_holder && R_SUCCEEDED(timeGetCurrentTime(TimeType_LocalSystemClock, out));
+                if (R_FAILED(::timeInitialize())) {
+                    return false;
+                }
+                ON_SCOPE_EXIT { ::timeExit(); };
+
+                return R_SUCCEEDED(::timeGetCurrentTime(TimeType_LocalSystemClock, out));
             }
         }
 
@@ -85,8 +89,8 @@ namespace ams::creport {
         this->heap_handle = lmem::CreateExpHeap(this->heap_storage, sizeof(this->heap_storage), lmem::CreateOption_None);
 
         /* Allocate members. */
-        this->module_list   = new (lmem::AllocateFromExpHeap(this->heap_handle, sizeof(ModuleList))) ModuleList;
-        this->thread_list   = new (lmem::AllocateFromExpHeap(this->heap_handle, sizeof(ThreadList))) ThreadList;
+        this->module_list   = std::construct_at(static_cast<ModuleList *>(lmem::AllocateFromExpHeap(this->heap_handle, sizeof(ModuleList))));
+        this->thread_list   = std::construct_at(static_cast<ThreadList *>(lmem::AllocateFromExpHeap(this->heap_handle, sizeof(ThreadList))));
         this->dying_message = static_cast<u8 *>(lmem::AllocateFromExpHeap(this->heap_handle, DyingMessageSizeMax));
         if (this->dying_message != nullptr) {
             std::memset(this->dying_message, 0, DyingMessageSizeMax);
@@ -219,7 +223,7 @@ namespace ams::creport {
 
     void CrashReport::HandleDebugEventInfoCreateThread(const svc::DebugEventInfo &d) {
         /* Save info on the thread's TLS address for later. */
-        this->thread_tls_map[d.info.create_thread.thread_id] = d.info.create_thread.tls_address;
+        this->thread_tls_map.SetThreadTls(d.info.create_thread.thread_id, d.info.create_thread.tls_address);
     }
 
     void CrashReport::HandleDebugEventInfoException(const svc::DebugEventInfo &d) {
@@ -288,7 +292,7 @@ namespace ams::creport {
         svcReadDebugProcessMemory(this->dying_message, this->debug_handle, this->dying_message_address, this->dying_message_size);
     }
 
-    void CrashReport::SaveReport() {
+    void CrashReport::SaveReport(bool enable_screenshot) {
         /* Try to ensure path exists. */
         TryCreateReportDirectories();
 
@@ -303,7 +307,7 @@ namespace ams::creport {
             char file_path[fs::EntryNameLengthMax + 1];
 
             /* Save crash report. */
-            std::snprintf(file_path, sizeof(file_path), "sdmc:/atmosphere/crash_reports/%011lu_%016lx.log", timestamp, this->process_info.program_id);
+            util::SNPrintf(file_path, sizeof(file_path), "sdmc:/atmosphere/crash_reports/%011lu_%016lx.log", timestamp, this->process_info.program_id);
             {
                 ScopedFile file(file_path);
                 if (file.IsOpen()) {
@@ -312,7 +316,7 @@ namespace ams::creport {
             }
 
             /* Dump threads. */
-            std::snprintf(file_path, sizeof(file_path), "sdmc:/atmosphere/crash_reports/dumps/%011lu_%016lx_thread_info.bin", timestamp, this->process_info.program_id);
+            util::SNPrintf(file_path, sizeof(file_path), "sdmc:/atmosphere/crash_reports/dumps/%011lu_%016lx_thread_info.bin", timestamp, this->process_info.program_id);
             {
                 ScopedFile file(file_path);
                 if (file.IsOpen()) {
@@ -321,8 +325,8 @@ namespace ams::creport {
             }
 
             /* Finalize our heap. */
-            this->module_list->~ModuleList();
-            this->thread_list->~ThreadList();
+            std::destroy_at(this->module_list);
+            std::destroy_at(this->thread_list);
             lmem::FreeToExpHeap(this->heap_handle, this->module_list);
             lmem::FreeToExpHeap(this->heap_handle, this->thread_list);
             if (this->dying_message != nullptr) {
@@ -333,12 +337,16 @@ namespace ams::creport {
             this->dying_message = nullptr;
 
             /* Try to take a screenshot. */
+            /* NOTE: Nintendo validates that enable_screenshot is true here, and validates that the application id is not in a blacklist. */
+            /* Since we save reports only locally and do not send them via telemetry, we will skip this. */
+            AMS_UNUSED(enable_screenshot);
             if (hos::GetVersion() >= hos::Version_9_0_0 && this->IsApplication()) {
-                sm::ScopedServiceHolder<capsrv::InitializeScreenShotControl, capsrv::FinalizeScreenShotControl> capssc_holder;
-                if (capssc_holder) {
+                if (R_SUCCEEDED(capsrv::InitializeScreenShotControl())) {
+                    ON_SCOPE_EXIT { capsrv::FinalizeScreenShotControl(); };
+
                     u64 jpeg_size;
                     if (R_SUCCEEDED(capsrv::CaptureJpegScreenshot(std::addressof(jpeg_size), this->heap_storage, sizeof(this->heap_storage), vi::LayerStack_ApplicationForDebug, TimeSpan::FromSeconds(10)))) {
-                        std::snprintf(file_path, sizeof(file_path), "sdmc:/atmosphere/crash_reports/%011lu_%016lx.jpg", timestamp, this->process_info.program_id);
+                        util::SNPrintf(file_path, sizeof(file_path), "sdmc:/atmosphere/crash_reports/%011lu_%016lx.jpg", timestamp, this->process_info.program_id);
                         ScopedFile file(file_path);
                         if (file.IsOpen()) {
                             file.Write(this->heap_storage, jpeg_size);

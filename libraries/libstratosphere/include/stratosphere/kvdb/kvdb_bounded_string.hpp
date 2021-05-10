@@ -49,7 +49,7 @@ namespace ams::kvdb {
 
                 std::va_list args;
                 va_start(args, format);
-                CheckLength(std::vsnprintf(string.buffer, N, format, args));
+                CheckLength(util::VSNPrintf(string.buffer, N, format, args));
                 string.buffer[N - 1] = 0;
                 va_end(args);
 
@@ -58,7 +58,7 @@ namespace ams::kvdb {
 
             /* Getters. */
             size_t GetLength() const {
-                return strnlen(this->buffer, N);
+                return util::Strnlen(this->buffer, N);
             }
 
             const char *Get() const {
@@ -72,7 +72,7 @@ namespace ams::kvdb {
             /* Setters. */
             void Set(const char *s) {
                 /* Ensure string can fit in our buffer. */
-                CheckLength(strnlen(s, N));
+                CheckLength(util::Strnlen(s, N));
                 std::strncpy(this->buffer, s, N);
                 this->buffer[N - 1] = 0;
             }
@@ -81,14 +81,14 @@ namespace ams::kvdb {
                 /* Format into the buffer, abort if too large. */
                 std::va_list args;
                 va_start(args, format);
-                CheckLength(std::vsnprintf(this->buffer, N, format, args));
+                CheckLength(util::VSNPrintf(this->buffer, N, format, args));
                 va_end(args);
             }
 
             /* Append to existing. */
             void Append(const char *s) {
                 const size_t length = GetLength();
-                CheckLength(length + strnlen(s, N));
+                CheckLength(length + util::Strnlen(s, N));
                 std::strncat(this->buffer, s, N - length - 1);
             }
 
@@ -103,7 +103,7 @@ namespace ams::kvdb {
                 const size_t length = GetLength();
                 std::va_list args;
                 va_start(args, format);
-                CheckLength(std::vsnprintf(this->buffer + length, N - length, format, args) + length);
+                CheckLength(util::VSNPrintf(this->buffer + length, N - length, format, args) + length);
                 va_end(args);
             }
 
@@ -137,7 +137,7 @@ namespace ams::kvdb {
             }
 
             bool EndsWith(const char *s) const {
-                const size_t suffix_length = strnlen(s, N);
+                const size_t suffix_length = util::Strnlen(s, N);
                 const size_t length = GetLength();
                 return suffix_length <= length && EndsWith(s, length - suffix_length);
             }

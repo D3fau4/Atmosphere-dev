@@ -37,17 +37,15 @@ extern "C" {
     alignas(16) u8 __nx_exception_stack[ams::os::MemoryPageSize];
     u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
     void __libnx_exception_handler(ThreadExceptionDump *ctx);
+
+    void *__libnx_alloc(size_t size);
+    void *__libnx_aligned_alloc(size_t alignment, size_t size);
+    void __libnx_free(void *mem);
 }
 
 namespace ams {
 
     ncm::ProgramId CurrentProgramId = ncm::AtmosphereProgramId::Mitm;
-
-    namespace result {
-
-        bool CallFatalOnResultAssertion = false;
-
-    }
 
     /* Override. */
     void ExceptionHandler(FatalErrorContext *ctx) {
@@ -78,13 +76,13 @@ void __libnx_initheap(void) {
 void __appInit(void) {
     hos::InitializeForStratosphere();
 
-    sm::DoWithSession([&]() {
-        R_ABORT_UNLESS(fsInitialize());
-        R_ABORT_UNLESS(pmdmntInitialize());
-        R_ABORT_UNLESS(pminfoInitialize());
-        ncm::Initialize();
-        spl::InitializeForFs();
-    });
+    R_ABORT_UNLESS(sm::Initialize());
+
+    R_ABORT_UNLESS(fsInitialize());
+    R_ABORT_UNLESS(pmdmntInitialize());
+    R_ABORT_UNLESS(pminfoInitialize());
+    ncm::Initialize();
+    spl::InitializeForFs();
 
     /* Disable auto-abort in fs operations. */
     fs::SetEnabledAutoAbort(false);
@@ -107,7 +105,28 @@ void __appExit(void) {
     fsExit();
 }
 
+void *__libnx_alloc(size_t size) {
+    AMS_ABORT("__libnx_alloc was called");
+}
+
+void *__libnx_aligned_alloc(size_t alignment, size_t size) {
+    AMS_ABORT("__libnx_aligned_alloc was called");
+}
+
+void __libnx_free(void *mem) {
+    AMS_ABORT("__libnx_free was called");
+}
+
 int main(int argc, char **argv) {
+    /* Register "ams" port, use up its session. */
+    {
+        svc::Handle ams_port;
+        R_ABORT_UNLESS(svc::ManageNamedPort(std::addressof(ams_port), "ams", 1));
+
+        svc::Handle ams_session;
+        R_ABORT_UNLESS(svc::ConnectToNamedPort(std::addressof(ams_session), "ams"));
+    }
+
     /* Launch all mitm modules in sequence. */
     mitm::LaunchAllModules();
 

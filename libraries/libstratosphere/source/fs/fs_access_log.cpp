@@ -80,7 +80,7 @@ namespace ams::fs {
 namespace ams::fs::impl {
 
     const char *IdString::ToValueString(int id) {
-        const int len = std::snprintf(this->buffer, sizeof(this->buffer), "%d", id);
+        const int len = util::SNPrintf(this->buffer, sizeof(this->buffer), "%d", id);
         AMS_ASSERT(static_cast<size_t>(len) < sizeof(this->buffer));
         return this->buffer;
     }
@@ -156,6 +156,14 @@ namespace ams::fs::impl {
         }
     }
 
+    template<> const char *IdString::ToString<fs::DirectoryEntryType>(fs::DirectoryEntryType type) {
+        switch (type) {
+            case fs::DirectoryEntryType_Directory: return "Directory";
+            case fs::DirectoryEntryType_File:      return "File";
+            default:                               return ToValueString(static_cast<int>(type));
+        }
+    }
+
     namespace {
 
         class AccessLogPrinterCallbackManager {
@@ -202,7 +210,7 @@ namespace ams::fs::impl {
                         return;
                     }
 
-                    const auto size = std::vsnprintf(log_buffer.get(), log_buffer_size, format, vl);
+                    const auto size = util::VSNPrintf(log_buffer.get(), log_buffer_size, format, vl);
                     if (size < log_buffer_size) {
                         break;
                     }
@@ -233,7 +241,7 @@ namespace ams::fs::impl {
                     return;
                 }
 
-                const auto size = std::vsnprintf(str_buffer.get(), str_buffer_size, format, vl);
+                const auto size = util::VSNPrintf(str_buffer.get(), str_buffer_size, format, vl);
                 if (size < str_buffer_size) {
                     break;
                 }
@@ -269,7 +277,7 @@ namespace ams::fs::impl {
                         return;
                     }
 
-                    log_buffer_size = 1 + std::snprintf(log_buffer.get(), try_size, FormatString, start_ms, end_ms, result.GetValue(), handle, priority, name, str_buffer.get());
+                    log_buffer_size = 1 + util::SNPrintf(log_buffer.get(), try_size, FormatString, start_ms, end_ms, result.GetValue(), handle, priority, name, str_buffer.get());
                     if (log_buffer_size <= try_size) {
                         break;
                     }
@@ -312,7 +320,7 @@ namespace ams::fs::impl {
                                                   " }\n";
 
                 char log_buffer[0x80];
-                const int len = 1 + std::snprintf(log_buffer, sizeof(log_buffer), StartLog, static_cast<int>(program_index));
+                const int len = 1 + util::SNPrintf(log_buffer, sizeof(log_buffer), StartLog, static_cast<int>(program_index));
                 if (static_cast<size_t>(len) <= sizeof(log_buffer)) {
                     OutputAccessLogImpl(log_buffer, len);
                 }

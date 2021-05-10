@@ -20,15 +20,13 @@
 
 namespace ams::kern {
 
-    extern KThread g_cv_arbiter_compare_thread;
-
     class KConditionVariable {
         public:
             using ThreadTree = typename KThread::ConditionVariableThreadTreeType;
         private:
-            ThreadTree tree;
+            ThreadTree m_tree;
         public:
-            constexpr KConditionVariable() : tree() { /* ... */ }
+            constexpr KConditionVariable() : m_tree() { /* ... */ }
 
             /* Arbitration. */
             Result SignalToAddress(KProcessAddress addr);
@@ -38,7 +36,7 @@ namespace ams::kern {
             void Signal(uintptr_t cv_key, s32 count);
             Result Wait(KProcessAddress addr, uintptr_t key, u32 value, s64 timeout);
         private:
-            KThread *SignalImpl(KThread *thread);
+            void SignalImpl(KThread *thread);
     };
 
     ALWAYS_INLINE void BeforeUpdatePriority(KConditionVariable::ThreadTree *tree, KThread *thread) {

@@ -44,9 +44,8 @@ namespace ams::kern {
     constexpr size_t KernelInitialPageHeapSize  = 128_KB;
 
     constexpr size_t KernelSlabHeapDataSize           = 5_MB;
-    constexpr size_t KernelSlabHeapGapsSize           = 2_MB - 64_KB;
-    constexpr size_t KernelSlabHeapGapsSizeDeprecated = 2_MB;
-    constexpr size_t KernelSlabHeapSize               = KernelSlabHeapDataSize + KernelSlabHeapGapsSize;
+    constexpr size_t KernelSlabHeapGapsSizeMax        = 2_MB - 64_KB;
+    constexpr size_t KernelSlabHeapSize               = KernelSlabHeapDataSize + KernelSlabHeapGapsSizeMax;
 
     /* NOTE: This is calculated from KThread slab counts, assuming KThread size <= 0x860. */
     constexpr size_t KernelSlabHeapAdditionalSize     = 0x68000;
@@ -112,7 +111,9 @@ namespace ams::kern {
             }
 
             static ALWAYS_INLINE KVirtualAddress GetStackTopAddress(s32 core_id, KMemoryRegionType type) {
-                return Dereference(GetVirtualMemoryRegionTree().FindByTypeAndAttribute(type, static_cast<u32>(core_id))).GetEndAddress();
+                const auto &region = Dereference(GetVirtualMemoryRegionTree().FindByTypeAndAttribute(type, static_cast<u32>(core_id)));
+                MESOSPHERE_INIT_ABORT_UNLESS(region.GetEndAddress() != 0);
+                return region.GetEndAddress();
             }
         public:
             static ALWAYS_INLINE KMemoryRegionTree &GetVirtualMemoryRegionTree()        { return s_virtual_tree; }
@@ -134,7 +135,6 @@ namespace ams::kern {
             static NOINLINE KVirtualAddress GetExceptionStackTopAddress(s32 core_id) { return GetStackTopAddress(core_id, KMemoryRegionType_KernelMiscExceptionStack); }
 
             static NOINLINE KVirtualAddress GetSlabRegionAddress()      { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_KernelSlab)).GetAddress(); }
-            static NOINLINE KVirtualAddress GetCoreLocalRegionAddress() { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_CoreLocalRegion)).GetAddress(); }
 
             static NOINLINE const KMemoryRegion &GetDeviceRegion(KMemoryRegionType type) { return Dereference(GetPhysicalMemoryRegionTree().FindFirstDerived(type)); }
             static KPhysicalAddress GetDevicePhysicalAddress(KMemoryRegionType type) { return GetDeviceRegion(type).GetAddress(); }
@@ -144,7 +144,6 @@ namespace ams::kern {
             static NOINLINE const KMemoryRegion &GetPageTableHeapRegion()  { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_VirtualDramKernelPtHeap)); }
             static NOINLINE const KMemoryRegion &GetKernelStackRegion()    { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_KernelStack)); }
             static NOINLINE const KMemoryRegion &GetTempRegion()           { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_KernelTemp)); }
-            static NOINLINE const KMemoryRegion &GetCoreLocalRegion()      { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_CoreLocalRegion)); }
 
             static NOINLINE const KMemoryRegion &GetKernelTraceBufferRegion() { return Dereference(GetVirtualLinearMemoryRegionTree().FindByType(KMemoryRegionType_VirtualDramKernelTraceBuffer)); }
 
@@ -176,7 +175,14 @@ namespace ams::kern {
                 return std::make_tuple(total_size, kernel_size);
             }
 
-            static void InitializeLinearMemoryRegionTrees(KPhysicalAddress aligned_linear_phys_start, KVirtualAddress linear_virtual_start);
+            static void InitializeLinearMemoryAddresses(KPhysicalAddress aligned_linear_phys_start, KVirtualAddress linear_virtual_start) {
+                /* Set static differences. */
+                s_linear_phys_to_virt_diff = GetInteger(linear_virtual_start) - GetInteger(aligned_linear_phys_start);
+                s_linear_virt_to_phys_diff = GetInteger(aligned_linear_phys_start) - GetInteger(linear_virtual_start);
+            }
+
+            static void InitializeLinearMemoryRegionTrees();
+
             static size_t GetResourceRegionSizeForInit();
 
             static NOINLINE auto GetKernelRegionExtents()      { return GetVirtualMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_Kernel); }
@@ -189,8 +195,8 @@ namespace ams::kern {
             static NOINLINE auto GetLinearRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionAttr_LinearMapped); }
 
             static NOINLINE auto GetLinearRegionVirtualExtents()  {
-                auto physical = GetLinearRegionPhysicalExtents();
-                return KMemoryRegion(GetInteger(GetLinearVirtualAddress(physical.GetAddress())), physical.GetSize(), 0, KMemoryRegionType_None);
+                const auto physical = GetLinearRegionPhysicalExtents();
+                return KMemoryRegion(GetInteger(GetLinearVirtualAddress(physical.GetAddress())), GetInteger(GetLinearVirtualAddress(physical.GetLastAddress())), 0, KMemoryRegionType_None);
             }
 
             static NOINLINE auto GetMainMemoryPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_Dram); }
@@ -216,7 +222,6 @@ namespace ams::kern {
     namespace init {
 
         /* These should be generic, regardless of board. */
-        void SetupCoreLocalRegionMemoryRegions(KInitialPageTable &page_table, KInitialPageAllocator &page_allocator);
         void SetupPoolPartitionMemoryRegions();
 
         /* These may be implemented in a board-specific manner. */

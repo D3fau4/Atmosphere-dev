@@ -79,10 +79,22 @@ namespace ams::pgl {
         ::PglEventObserver obs;
         R_TRY(::pglGetEventObserver(std::addressof(obs)));
 
-        auto remote_observer = ams::sf::MakeShared<pgl::sf::IEventObserver, RemoteEventObserver>(obs);
-        AMS_ABORT_UNLESS(remote_observer != nullptr);
+        /* TODO: Real allocator */
+        if (hos::GetVersion() >= hos::Version_12_0_0) {
+            auto observer_holder = std::make_unique<impl::EventObserverByTipc<RemoteEventObserver>>(obs);
+            R_UNLESS(observer_holder != nullptr, pgl::ResultOutOfMemory());
 
-        *out = pgl::EventObserver(remote_observer);
+            *out = pgl::EventObserver(std::move(observer_holder));
+        } else {
+            auto remote_observer = ams::sf::CreateSharedObjectEmplaced<pgl::sf::IEventObserver, RemoteEventObserver>(obs);
+            R_UNLESS(remote_observer != nullptr, pgl::ResultOutOfMemory());
+
+            auto observer_holder = std::make_unique<impl::EventObserverByCmif>(std::move(remote_observer));
+            R_UNLESS(observer_holder != nullptr, pgl::ResultOutOfMemory());
+
+            *out = pgl::EventObserver(std::move(observer_holder));
+        }
+
         return ResultSuccess();
     }
 

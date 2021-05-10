@@ -43,12 +43,12 @@ namespace ams::kern::svc {
 
             /* Ensure that we clean up the session (and its only references are handle table) on function end. */
             ON_SCOPE_EXIT {
-                session->GetServerSession().Close();
                 session->GetClientSession().Close();
+                session->GetServerSession().Close();
             };
 
             /* Register the session. */
-            R_TRY(T::Register(session));
+            T::Register(session);
 
             /* Add the server session to the handle table. */
             R_TRY(handle_table.Add(out_server, std::addressof(session->GetServerSession())));
