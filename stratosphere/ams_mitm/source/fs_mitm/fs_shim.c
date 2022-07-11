@@ -104,7 +104,7 @@ Result fsOpenFileSystemWithIdFwd(Service* s, FsFileSystem* out, u64 id, FsFileSy
     );
 }
 
-Result fsOpenGameCardStorage(FsStorage* out, const FsGameCardHandle* handle, u32 partition)
+/*Result fsOpenGameCardStorage(FsStorage* out, const FsGameCardHandle* handle, u32 partition)
 {
     const struct {
         u32 handle;
@@ -115,15 +115,15 @@ Result fsOpenGameCardStorage(FsStorage* out, const FsGameCardHandle* handle, u32
         .out_num_objects = 1,
         .out_objects = &out->s
     );
-}
+}*/
 
-Result fsOpenGameCardFileSystem(FsFileSystem *out, const FsGameCardHandle *handle, u32 partition){
+Result m_fsOpenGameCardFileSystem(Service* s, FsFileSystem *out, const FsGameCardHandle *handle, u32 partition){
     const struct {
         u32 handle;
         u32 partition;
     } in = { handle->value, partition };
 
-    return serviceDispatchIn(fsGetServiceSession(), 31, in,
+    return serviceDispatchIn(s, 31, in,
         .out_num_objects = 1,
         .out_objects = &out->s,
     );
