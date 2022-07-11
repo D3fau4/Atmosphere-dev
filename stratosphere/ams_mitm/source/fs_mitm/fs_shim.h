@@ -25,7 +25,7 @@ Result fsOpenSaveDataFileSystemFwd(Service* s, FsFileSystem* out, FsSaveDataSpac
 Result fsOpenFileSystemWithPatchFwd(Service* s, FsFileSystem* out, u64 id, FsFileSystemType fsType);
 Result fsOpenFileSystemWithIdFwd(Service* s, FsFileSystem* out, u64 id, FsFileSystemType fsType, const char* contentPath);
 
-//Result fsOpenGameCardStorage(FsStorage* out, const FsGameCardHandle* handle, u32 partition);
+Result fsOpenGameCardStorage(FsStorage* out, const FsGameCardHandle* handle, u32 partition);
 Result m_fsOpenGameCardFileSystem(Service* s, FsFileSystem *out, const FsGameCardHandle *handle, u32 partition);
 
 
