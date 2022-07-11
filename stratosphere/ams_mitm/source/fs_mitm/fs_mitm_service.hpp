@@ -16,6 +16,7 @@
 #pragma once
 #include <stratosphere.hpp>
 #include <stratosphere/fssrv/fssrv_interface_adapters.hpp>
+#include "fsmitm_debug.hpp"
 
 #define AMS_FS_MITM_INTERFACE_INFO(C, H)                                                                                                                                                                                                                                               \
     AMS_SF_METHOD_INFO(C, H,   7, Result, OpenFileSystemWithPatch,         (sf::Out<sf::SharedPointer<ams::fssrv::sf::IFileSystem>> out, ncm::ProgramId program_id, u32 _filesystem_type),                              (out, program_id, _filesystem_type),       hos::Version_2_0_0) \

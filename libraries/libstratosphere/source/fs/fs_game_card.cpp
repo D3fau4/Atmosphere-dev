@@ -69,6 +69,30 @@ namespace ams::fs {
         R_SUCCEED();
     }
 
+    Result DetermineXciSubStorages(std::shared_ptr<fs::IStorage> *out_key_area, std::shared_ptr<fs::IStorage> *out_body, std::shared_ptr<fs::IStorage> &storage) {
+        /* Get the storage size. */
+        s64 storage_size;
+        R_TRY(storage->GetSize(std::addressof(storage_size)));
+
+        /* Try to read the header from after the initial data region. */
+        if (storage_size >= static_cast<s64>(CardInitialDataRegionSize)) {
+            gc::impl::CardHeaderWithSignature card_header;
+            R_TRY(storage->Read(CardInitialDataRegionSize, std::addressof(card_header), sizeof(card_header)));
+
+            if (card_header.data.magic == gc::impl::CardHeader::Magic) {
+                *out_key_area = std::make_shared<fs::SubStorage>(std::shared_ptr<fs::IStorage>(storage), 0, CardInitialDataRegionSize);
+                *out_body     = std::make_shared<fs::SubStorage>(std::shared_ptr<fs::IStorage>(storage), CardInitialDataRegionSize, storage_size - CardInitialDataRegionSize);
+                R_SUCCEED();
+            }
+        }
+
+        /* Default to treating the xci as though it has no key area. */
+        fprintf(stderr, "[Warning]: Game card is missing key area/initial data header. Re-dump?\n");
+        *out_key_area = nullptr;
+        *out_body     = std::make_shared<fs::SubStorage>(storage, 0, storage_size);
+        R_SUCCEED();
+    }
+
     Result MountGameCardPartition(const char *name, GameCardHandle handle, GameCardPartition partition) {
         auto mount_impl = [=]() -> Result {
             /* Validate the mount name. */

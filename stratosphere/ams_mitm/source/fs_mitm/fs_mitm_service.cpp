@@ -161,24 +161,342 @@ namespace ams::mitm::fs {
         }
 
     }
+    
+    Result OpenFileStorage(std::shared_ptr<fs::IStorage> *out, std::shared_ptr<fs::fsa::IFileSystem> &fs, const char *path) {
+        /* Open the file storage. */
+        std::shared_ptr<ams::fs::FileStorageBasedFileSystem> file_storage = fssystem::AllocateShared<ams::fs::FileStorageBasedFileSystem>();
+        R_UNLESS(file_storage != nullptr, fs::ResultAllocationMemoryFailedInNcaFileSystemServiceImplB());
+
+        /* Get the fs path. */
+        ams::fs::Path fs_path;
+        R_UNLESS(path != nullptr, fs::ResultNullptrArgument());
+        R_TRY(fs_path.SetShallowBuffer(path));
+
+        /* Initialize the file storage. */
+        R_TRY(file_storage->Initialize(std::shared_ptr<fs::fsa::IFileSystem>(fs), fs_path, ams::fs::OpenMode_Read));
+
+        /* Set the output. */
+        *out = std::move(file_storage);
+        R_SUCCEED();
+    }
+
+    Result CreateRootPartitionFileSystem(std::shared_ptr<fs::fsa::IFileSystem> *out, std::shared_ptr<fs::IStorage> &storage, const gc::impl::CardHeaderWithSignature &header) {
+        /* Create meta data. */
+        auto meta = std::make_unique<fssystem::Sha256PartitionFileSystemMeta>();
+        AMS_ABORT_UNLESS(meta != nullptr);
+
+        /* Initialize meta data. */
+        {
+            util::optional<u8> salt = util::nullopt;
+            if (static_cast<fs::GameCardCompatibilityType>(header.data.encrypted_data.compatibility_type) != fs::GameCardCompatibilityType::Normal) {
+                salt.emplace(header.data.encrypted_data.compatibility_type);
+            }
+            R_TRY(meta->Initialize(storage.get(), sf::GetNewDeleteMemoryResource(), header.data.partition_fs_header_hash, sizeof(header.data.partition_fs_header_hash), salt));
+        }
+
+        /* Create fs. */
+        auto fs = std::make_shared<fssystem::Sha256PartitionFileSystem>();
+        R_TRY(fs->Initialize(std::move(meta), storage));
+
+        /* Set output. */
+        *out = std::move(fs);
+        R_SUCCEED();
+    }
+
+    Result CreatePartitionFileSystem(std::shared_ptr<fs::fsa::IFileSystem> *out, std::shared_ptr<fs::IStorage> &storage) {
+            /* Create meta data. */
+            auto meta = std::make_unique<fssystem::Sha256PartitionFileSystemMeta>();
+            AMS_ABORT_UNLESS(meta != nullptr);
+
+            s64 size;
+            R_ABORT_UNLESS(storage->GetSize(std::addressof(size)));
+
+            /* Initialize meta data. */
+            R_TRY(meta->Initialize(storage.get(), sf::GetNewDeleteMemoryResource()));
+
+            /* Create fs. */
+            auto fs = std::make_shared<fssystem::Sha256PartitionFileSystem>();
+            R_TRY(fs->Initialize(std::move(meta), storage));
+
+            /* Set output. */
+            *out = std::move(fs);
+            R_SUCCEED();
+        }
 
     Result FsMitmService::OpenGameCardStorage(sf::Out<sf::SharedPointer<ams::fssrv::sf::IStorage>> out, GameCardHandle handle, GameCardPartition partition) {
-        FsStorage data_storage;
-        const ::FsGameCardHandle _hnd = {handle};
-        R_TRY(fsOpenGameCardStorage(&data_storage, &_hnd, static_cast<::FsGameCardPartition>(partition)));
-        const sf::cmif::DomainObjectId target_object_id{serviceGetObjectId(&data_storage.s)};
-        std::unique_ptr<ams::fs::IStorage> unique_bis = std::make_unique<RemoteStorage>(data_storage);
-        out.SetValue(MakeSharedStorage(std::make_shared<ReadOnlyStorageAdapter>(std::move(unique_bis))), target_object_id);
+        if(HasSdFile("/game.xci")) {
+            std::shared_ptr<fs::IStorage> key_area_storage;
+            std::shared_ptr<fs::IStorage> body_storage;
+            ams::fs::XciBodyHeader body_header;
+            ams::fs::CardData card_data;
+
+            ams::fs::PartitionData root_partition;
+            ams::fs::PartitionData update_partition;
+            ams::fs::PartitionData logo_partition;
+            ams::fs::PartitionData normal_partition;
+            ams::fs::PartitionData secure_partition;
+            
+            /* Mount the SD card using fs.mitm's session. */
+            FsFileSystem sd_fs;
+            std::shared_ptr<fs::IStorage> storage = nullptr;
+            R_TRY(fsOpenSdCardFileSystem(std::addressof(sd_fs)));
+            std::shared_ptr<fs::fsa::IFileSystem> sd_ifs = std::make_shared<fs::RemoteFileSystem>(sd_fs);
+
+            if (const auto open_res = OpenFileStorage(std::addressof(storage), sd_ifs, "/game.xci"); R_SUCCEEDED(open_res)) {
+                ams::fs::DetermineXciSubStorages(std::addressof(key_area_storage), std::addressof(body_storage), storage);
+                R_ABORT_UNLESS(body_storage->Read(0, std::addressof(body_header), sizeof(body_header)));
+                card_data.header = body_header.card_header;
+                card_data.decrypted_header = card_data.header;
+                R_ABORT_UNLESS(gc::impl::GcCrypto::DecryptCardHeader(std::addressof(card_data.decrypted_header.data), sizeof(card_data.decrypted_header.data)));
+
+                /* Set up the headers for ca10 sign2. */
+                if (card_data.header.data.flags & fs::GameCardAttribute_HasCa10CertificateFlag) {
+                    card_data.ca10_certificate          = body_header.ca10_cert;
+                    card_data.header_for_hash           = body_header.card_header_for_sign2;
+                    card_data.decrypted_header_for_hash = card_data.header_for_hash;
+                    R_ABORT_UNLESS(gc::impl::GcCrypto::DecryptCardHeader(std::addressof(card_data.decrypted_header_for_hash.data), sizeof(card_data.decrypted_header_for_hash.data)));
+                } else {
+                    card_data.ca10_certificate          = {};
+                    card_data.header_for_hash           = card_data.header;
+                    card_data.decrypted_header_for_hash = card_data.decrypted_header;
+                }
+
+                /* Read the T1 cert. */
+                R_ABORT_UNLESS(body_storage->Read(CardPageSize * 0x38, std::addressof(card_data.t1_certificate), sizeof(card_data.t1_certificate)));
+
+                /* Parse the root partition. */
+                {
+                    /* Create the root partition storage. */
+                    using AlignmentMatchingStorageForGameCard = fssystem::AlignmentMatchingStorageInBulkRead<1>;
+                    auto aligned_storage = std::make_shared<AlignmentMatchingStorageForGameCard>(body_storage, CardPageSize);
+
+                    /* Get the size of the body. */
+                    s64 body_size;
+                    R_ABORT_UNLESS(aligned_storage->GetSize(std::addressof(body_size)));
+
+                    /* Create sub storage for the root partition. */
+                    root_partition.storage = std::make_shared<fs::SubStorage>(std::move(aligned_storage), card_data.header.data.partition_fs_header_address, body_size - card_data.header.data.partition_fs_header_address);
+
+                    /* Create filesystem for the root partition. */
+                    if (const auto res = CreateRootPartitionFileSystem(std::addressof(root_partition.fs), root_partition.storage, card_data.decrypted_header); R_FAILED(res)) {
+                        fprintf(stderr, "[Warning]: Failed to mount the game card root partition: 2%03d-%04d\n", res.GetModule(), res.GetDescription());
+                    }
+                }
+
+                /* Parse all other partitions. */
+            if (root_partition.fs != nullptr) {
+                const auto iter_result = fssystem::IterateDirectoryRecursively(root_partition.fs.get(),
+                    fs::MakeConstantPath("/"),
+                    [&] (const fs::Path &, const fs::DirectoryEntry &) -> Result {
+                        R_SUCCEED();
+                    },
+                    [&] (const fs::Path &, const fs::DirectoryEntry &) -> Result {
+                        R_SUCCEED();
+                    },
+                    [&] (const fs::Path &path, const fs::DirectoryEntry &) -> Result {
+                        PartitionData *target_partition = nullptr;
+
+                        if (std::strcmp(path.GetString(), "/update") == 0) {
+                            target_partition = std::addressof(update_partition);
+                        } else if (std::strcmp(path.GetString(), "/logo") == 0) {
+                            target_partition = std::addressof(logo_partition);
+                        } else if (std::strcmp(path.GetString(), "/normal") == 0) {
+                            target_partition = std::addressof(normal_partition);
+                        } else if (std::strcmp(path.GetString(), "/secure") == 0) {
+                            target_partition = std::addressof(secure_partition);
+                        } else {
+                            fprintf(stderr, "[Warning]: Found unrecognized game card partition (%s)\n", path.GetString());
+                        }
+
+                        if (target_partition != nullptr) {
+                            if (const auto res = OpenFileStorage(std::addressof(target_partition->storage), root_partition.fs, path.GetString()); R_SUCCEEDED(res)) {
+                                if (const auto res = CreatePartitionFileSystem(std::addressof(target_partition->fs), target_partition->storage); R_FAILED(res)) {
+                                    fprintf(stderr, "[Warning]: Failed to mount game card partition (%s): 2%03d-%04d\n", path.GetString(), res.GetModule(), res.GetDescription());
+                                }
+                            } else {
+                                fprintf(stderr, "[Warning]: Failed to open game card partition (%s): 2%03d-%04d\n", path.GetString(), res.GetModule(), res.GetDescription());
+                            }
+                        }
+
+                        R_SUCCEED();
+                    }
+                );
+                if (R_FAILED(iter_result)) {
+                    fprintf(stderr, "[Warning]: Iterating the root partition failed: 2%03d-%04d\n", iter_result.GetModule(), iter_result.GetDescription());
+                }
+            }
+
+            FsStorage data_storage;
+            const ::FsGameCardHandle _hnd = {handle};
+            R_TRY(fsOpenGameCardStorage(&data_storage, &_hnd, static_cast<::FsGameCardPartition>(partition)));
+            const sf::cmif::DomainObjectId target_object_id{serviceGetObjectId(&data_storage.s)};
+            switch((u32)partition) {
+                case 0:
+                    out.SetValue(MakeSharedStorage(std::make_shared<ReadOnlyStorageAdapter>(std::move(update_partition.storage))), target_object_id);
+                    return ResultSuccess();
+                case 1:
+                    out.SetValue(MakeSharedStorage(std::make_shared<ReadOnlyStorageAdapter>(std::move(normal_partition.storage))), target_object_id);
+                    return ResultSuccess();
+                case 2:
+                    out.SetValue(MakeSharedStorage(std::make_shared<ReadOnlyStorageAdapter>(std::move(secure_partition.storage))), target_object_id);
+                    return ResultSuccess();
+                case 3:
+                    out.SetValue(MakeSharedStorage(std::make_shared<ReadOnlyStorageAdapter>(std::move(logo_partition.storage))), target_object_id);
+                    return ResultSuccess();
+            }
+
+            }
+        } else {
+            FsStorage data_storage;
+            const ::FsGameCardHandle _hnd = {handle};
+            R_TRY(fsOpenGameCardStorage(&data_storage, &_hnd, static_cast<::FsGameCardPartition>(partition)));
+            const sf::cmif::DomainObjectId target_object_id{serviceGetObjectId(&data_storage.s)};
+            std::unique_ptr<ams::fs::IStorage> unique_bis = std::make_unique<RemoteStorage>(data_storage);
+            out.SetValue(MakeSharedStorage(std::make_shared<ReadOnlyStorageAdapter>(std::move(unique_bis))), target_object_id);
+            return ResultSuccess();
+        }
         return ResultSuccess();
+        /**/
     }
 
     Result FsMitmService::OpenGameCardFileSystem(sf::Out<sf::SharedPointer<ams::fssrv::sf::IFileSystem>> out, ams::fs::GameCardHandle handle, ams::fs::GameCardPartition partition) {
-        FsFileSystem base_fs;
-        const ::FsGameCardHandle _hnd = {handle};
-        R_TRY(m_fsOpenGameCardFileSystem(m_forward_service.get(), &base_fs, &_hnd, static_cast<::FsGameCardPartition>(partition)));
-        const sf::cmif::DomainObjectId target_object_id{serviceGetObjectId(&base_fs.s)};
-        std::shared_ptr<fs::fsa::IFileSystem> redir_fs =  std::make_unique<RemoteFileSystem>(base_fs);
-        out.SetValue(MakeSharedFileSystem(std::move(redir_fs), false), target_object_id);
+        /* Mount the SD card using fs.mitm's session. */
+        if(HasSdFile("/game.xci")) {
+            std::shared_ptr<fs::IStorage> key_area_storage;
+            std::shared_ptr<fs::IStorage> body_storage;
+            ams::fs::XciBodyHeader body_header;
+            ams::fs::CardData card_data;
+
+            ams::fs::PartitionData root_partition;
+            ams::fs::PartitionData update_partition;
+            ams::fs::PartitionData logo_partition;
+            ams::fs::PartitionData normal_partition;
+            ams::fs::PartitionData secure_partition;
+
+            FsFileSystem sd_fs;
+            std::shared_ptr<fs::IStorage> storage = nullptr;
+            R_TRY(fsOpenSdCardFileSystem(std::addressof(sd_fs)));
+            std::shared_ptr<fs::fsa::IFileSystem> sd_ifs = std::make_shared<fs::RemoteFileSystem>(sd_fs);
+
+            if (const auto open_res = OpenFileStorage(std::addressof(storage), sd_ifs, "/game.xci"); R_SUCCEEDED(open_res)) {
+                ams::fs::DetermineXciSubStorages(std::addressof(key_area_storage), std::addressof(body_storage), storage);
+                R_ABORT_UNLESS(body_storage->Read(0, std::addressof(body_header), sizeof(body_header)));
+                card_data.header = body_header.card_header;
+                card_data.decrypted_header = card_data.header;
+                R_ABORT_UNLESS(gc::impl::GcCrypto::DecryptCardHeader(std::addressof(card_data.decrypted_header.data), sizeof(card_data.decrypted_header.data)));
+
+                /* Set up the headers for ca10 sign2. */
+                if (card_data.header.data.flags & fs::GameCardAttribute_HasCa10CertificateFlag) {
+                    card_data.ca10_certificate          = body_header.ca10_cert;
+                    card_data.header_for_hash           = body_header.card_header_for_sign2;
+                    card_data.decrypted_header_for_hash = card_data.header_for_hash;
+                    R_ABORT_UNLESS(gc::impl::GcCrypto::DecryptCardHeader(std::addressof(card_data.decrypted_header_for_hash.data), sizeof(card_data.decrypted_header_for_hash.data)));
+                } else {
+                    card_data.ca10_certificate          = {};
+                    card_data.header_for_hash           = card_data.header;
+                    card_data.decrypted_header_for_hash = card_data.decrypted_header;
+                }
+
+                /* Read the T1 cert. */
+                R_ABORT_UNLESS(body_storage->Read(CardPageSize * 0x38, std::addressof(card_data.t1_certificate), sizeof(card_data.t1_certificate)));
+
+                /* Parse the root partition. */
+                {
+                    /* Create the root partition storage. */
+                    using AlignmentMatchingStorageForGameCard = fssystem::AlignmentMatchingStorageInBulkRead<1>;
+                    auto aligned_storage = std::make_shared<AlignmentMatchingStorageForGameCard>(body_storage, CardPageSize);
+
+                    /* Get the size of the body. */
+                    s64 body_size;
+                    R_ABORT_UNLESS(aligned_storage->GetSize(std::addressof(body_size)));
+
+                    /* Create sub storage for the root partition. */
+                    root_partition.storage = std::make_shared<fs::SubStorage>(std::move(aligned_storage), card_data.header.data.partition_fs_header_address, body_size - card_data.header.data.partition_fs_header_address);
+
+                    /* Create filesystem for the root partition. */
+                    if (const auto res = CreateRootPartitionFileSystem(std::addressof(root_partition.fs), root_partition.storage, card_data.decrypted_header); R_FAILED(res)) {
+                        fprintf(stderr, "[Warning]: Failed to mount the game card root partition: 2%03d-%04d\n", res.GetModule(), res.GetDescription());
+                    }
+                }
+
+                /* Parse all other partitions. */
+            if (root_partition.fs != nullptr) {
+                const auto iter_result = fssystem::IterateDirectoryRecursively(root_partition.fs.get(),
+                    fs::MakeConstantPath("/"),
+                    [&] (const fs::Path &, const fs::DirectoryEntry &) -> Result {
+                        R_SUCCEED();
+                    },
+                    [&] (const fs::Path &, const fs::DirectoryEntry &) -> Result {
+                        R_SUCCEED();
+                    },
+                    [&] (const fs::Path &path, const fs::DirectoryEntry &) -> Result {
+                        PartitionData *target_partition = nullptr;
+
+                        if (std::strcmp(path.GetString(), "/update") == 0) {
+                            target_partition = std::addressof(update_partition);
+                        } else if (std::strcmp(path.GetString(), "/logo") == 0) {
+                            target_partition = std::addressof(logo_partition);
+                        } else if (std::strcmp(path.GetString(), "/normal") == 0) {
+                            target_partition = std::addressof(normal_partition);
+                        } else if (std::strcmp(path.GetString(), "/secure") == 0) {
+                            target_partition = std::addressof(secure_partition);
+                        } else {
+                            fprintf(stderr, "[Warning]: Found unrecognized game card partition (%s)\n", path.GetString());
+                        }
+
+                        if (target_partition != nullptr) {
+                            if (const auto res = OpenFileStorage(std::addressof(target_partition->storage), root_partition.fs, path.GetString()); R_SUCCEEDED(res)) {
+                                if (const auto res = CreatePartitionFileSystem(std::addressof(target_partition->fs), target_partition->storage); R_FAILED(res)) {
+                                    fprintf(stderr, "[Warning]: Failed to mount game card partition (%s): 2%03d-%04d\n", path.GetString(), res.GetModule(), res.GetDescription());
+                                }
+                            } else {
+                                fprintf(stderr, "[Warning]: Failed to open game card partition (%s): 2%03d-%04d\n", path.GetString(), res.GetModule(), res.GetDescription());
+                            }
+                        }
+
+                        R_SUCCEED();
+                    }
+                );
+                if (R_FAILED(iter_result)) {
+                    fprintf(stderr, "[Warning]: Iterating the root partition failed: 2%03d-%04d\n", iter_result.GetModule(), iter_result.GetDescription());
+                }
+            }
+
+            FsFileSystem base_fs;
+            const ::FsGameCardHandle _hnd = {handle};
+            R_TRY(m_fsOpenGameCardFileSystem(m_forward_service.get(), &base_fs, &_hnd, static_cast<::FsGameCardPartition>(partition)));
+            const sf::cmif::DomainObjectId target_object_id1{serviceGetObjectId(&base_fs.s)};
+            std::shared_ptr<fs::fsa::IFileSystem> redir_fs = nullptr;
+
+            switch((u32)partition) {
+                case 0:
+                    redir_fs = update_partition.fs;
+                    out.SetValue(MakeSharedFileSystem(std::move(redir_fs), false), target_object_id1);
+                    return ResultSuccess();
+                case 1:
+                    redir_fs = normal_partition.fs;
+                    out.SetValue(MakeSharedFileSystem(std::move(redir_fs), false), target_object_id1);
+                    return ResultSuccess();
+                case 2:
+                    redir_fs = secure_partition.fs;
+                    out.SetValue(MakeSharedFileSystem(std::move(redir_fs), false), target_object_id1);
+                    return ResultSuccess();
+                case 3:
+                    redir_fs = logo_partition.fs;
+                    out.SetValue(MakeSharedFileSystem(std::move(redir_fs), false), target_object_id1);
+                    return ResultSuccess();
+            }
+
+            }
+        } else {
+            FsFileSystem base_fs;
+            const ::FsGameCardHandle _hnd = {handle};
+            R_TRY(m_fsOpenGameCardFileSystem(m_forward_service.get(), &base_fs, &_hnd, static_cast<::FsGameCardPartition>(partition)));
+            const sf::cmif::DomainObjectId target_object_id1{serviceGetObjectId(&base_fs.s)};
+            std::shared_ptr<fs::fsa::IFileSystem> redir_fs =  std::make_unique<RemoteFileSystem>(base_fs);
+            out.SetValue(MakeSharedFileSystem(std::move(redir_fs), false), target_object_id1);
+            return ResultSuccess();
+        }
         return ResultSuccess();
     }
 

@@ -47,9 +47,35 @@ namespace ams::fs {
         Terra  = 1,
     };
 
+    constexpr size_t CardInitialDataRegionSize = 0x1000;
+
+    constexpr size_t CardPageSize = 0x200;
+
+    struct XciBodyHeader {
+        gc::impl::CardHeaderWithSignature card_header;
+        gc::impl::CardHeaderWithSignature card_header_for_sign2;
+        gc::impl::Ca10Certificate ca10_cert;
+    };
+
+    struct CardData {
+        gc::impl::CardInitialData initial_data;
+        gc::impl::CardHeaderWithSignature header;
+        gc::impl::CardHeaderWithSignature decrypted_header;
+        gc::impl::CardHeaderWithSignature header_for_hash;
+        gc::impl::CardHeaderWithSignature decrypted_header_for_hash;
+        gc::impl::T1CardCertificate t1_certificate;
+        gc::impl::Ca10Certificate ca10_certificate;
+    };
+
+    struct PartitionData {
+        std::shared_ptr<fs::IStorage> storage;
+        std::shared_ptr<fs::fsa::IFileSystem> fs;
+    };
+
     using GameCardHandle = u32;
 
     Result GetGameCardHandle(GameCardHandle *out);
     Result MountGameCardPartition(const char *name, GameCardHandle handle, GameCardPartition partition);
+    Result DetermineXciSubStorages(std::shared_ptr<fs::IStorage> *out_key_area, std::shared_ptr<fs::IStorage> *out_body, std::shared_ptr<fs::IStorage> &storage);
 
 }
