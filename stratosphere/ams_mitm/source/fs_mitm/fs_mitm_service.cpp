@@ -145,6 +145,25 @@ namespace ams::mitm::fs {
             R_SUCCEED();
         }
 
+        Result FsMitmService::OpenGameCardStorage(sf::Out<sf::SharedPointer<ams::fssrv::sf::IStorage>> out, GameCardHandle handle, GameCardPartition partition) {
+            FsStorage data_storage;
+            const ::FsGameCardHandle _hnd = {handle};
+            R_TRY(fsOpenGameCardStorage(&out, &_hnd, static_cast<::FsGameCardPartition>(partition)));
+            const sf::cmif::DomainObjectId target_object_id{serviceGetObjectId(&data_storage.s)};
+            out.SetValue(MakeSharedStorage(_hnd), target_object_id);
+            return ResultSuccess();
+        }
+
+        Result FsMitmService::OpenGameCardFileSystem(sf::Out<sf::SharedPointer<ams::fssrv::sf::IFileSystem>> out, ams::fs::GameCardHandle handle, ams::fs::GameCardPartition partition) {
+            FsFileSystem base_fs;
+            const ::FsGameCardHandle _hnd = {handle};
+            R_TRY(_fsOpenGameCardFileSystem(&base_fs, &_hnd, static_cast<::FsGameCardPartition>(partition)));
+            const sf::cmif::DomainObjectId target_object_id{serviceGetObjectId(&base_fs.s)};
+            std::shared_ptr<fs::fsa::IFileSystem> redir_fs =  std::make_unique<RemoteFileSystem>(base_fs);
+            out.SetValue(MakeSharedFileSystem(std::move(redir_fs), false), target_object_id);
+            return ResultSuccess();
+        }
+
         Result OpenWebContentFileSystem(sf::Out<sf::SharedPointer<ams::fssrv::sf::IFileSystem>> &out, ncm::ProgramId client_program_id, ncm::ProgramId program_id, FsFileSystemType filesystem_type, Service *fwd, const fssrv::sf::Path *path, bool with_id, bool try_program_specific) {
             /* Check first that we're a web applet opening web content. */
             R_UNLESS(ncm::IsWebAppletId(client_program_id),             sm::mitm::ResultShouldForwardToSession());
