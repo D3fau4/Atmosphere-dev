@@ -13,7 +13,7 @@ jobs:
 
     - name: Build app
       run: |
-        make all
+        make dist
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v4
       with:
