@@ -15,16 +15,10 @@ jobs:
     - name: Configure Git Safe Directory
       run: git config --global --add safe.directory /__w/Atmosphere/Atmosphere
 
-    - name: Debug Git Information
-      run: |
-        git status
-        git symbolic-ref --short HEAD || echo "No branch info"
-        git rev-parse --short HEAD || echo "No commit info"
-
-
     - name: Build app
       run: |
-        make dist
+        make all
+        
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v4
       with:
