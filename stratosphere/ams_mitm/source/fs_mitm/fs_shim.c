@@ -104,7 +104,7 @@ Result fsOpenFileSystemWithIdFwd(Service* s, FsFileSystem* out, u64 id, FsFileSy
     );
 }
 
-Result fsOpenGameCardStorage(Service* s, FsStorage* out, const FsGameCardHandle* handle, u32 partition)
+Result fsOpenGameCardStorageFwd(Service* s, FsStorage* out, const FsGameCardHandle* handle, u32 partition)
 {
     const struct {
         u32 handle;
@@ -116,7 +116,7 @@ Result fsOpenGameCardStorage(Service* s, FsStorage* out, const FsGameCardHandle*
     );
 }
 
-Result fsOpenGameCardFileSystem(Service* s, FsFileSystem *out, const FsGameCardHandle *handle, u32 partition){
+Result fsOpenGameCardFileSystemFwd(Service* s, FsFileSystem *out, const FsGameCardHandle *handle, u32 partition){
     const struct {
         u32 handle;
         u32 partition;
