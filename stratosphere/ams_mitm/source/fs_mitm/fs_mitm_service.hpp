@@ -21,6 +21,8 @@
     AMS_SF_METHOD_INFO(C, H,   7, Result, OpenFileSystemWithPatch,         (sf::Out<sf::SharedPointer<ams::fssrv::sf::IFileSystem>> out, ncm::ProgramId program_id, u32 _filesystem_type),                              (out, program_id, _filesystem_type),       hos::Version_2_0_0) \
     AMS_SF_METHOD_INFO(C, H,   8, Result, OpenFileSystemWithId,            (sf::Out<sf::SharedPointer<ams::fssrv::sf::IFileSystem>> out, const fssrv::sf::Path &path, ncm::ProgramId program_id, u32 _filesystem_type), (out, path, program_id, _filesystem_type), hos::Version_2_0_0) \
     AMS_SF_METHOD_INFO(C, H,  18, Result, OpenSdCardFileSystem,            (sf::Out<sf::SharedPointer<ams::fssrv::sf::IFileSystem>> out),                                                                               (out))                                                         \
+    AMS_SF_METHOD_INFO(C, H,  30, Result, OpenGameCardStorage,             (sf::Out<sf::SharedPointer<ams::fssrv::sf::IStorage>> out, ams::fs::GameCardHandle handle, ams::fs::GameCardPartition partition),            (out, handle, partition))                                      \
+    AMS_SF_METHOD_INFO(C, H,  31, Result, OpenGameCardFileSystem,          (sf::Out<sf::SharedPointer<ams::fssrv::sf::IFileSystem>> out, ams::fs::GameCardHandle handle, ams::fs::GameCardPartition partition),         (out, handle, partition))                                      \
     AMS_SF_METHOD_INFO(C, H,  51, Result, OpenSaveDataFileSystem,          (sf::Out<sf::SharedPointer<ams::fssrv::sf::IFileSystem>> out, u8 space_id, const ams::fs::SaveDataAttribute &attribute),                     (out, space_id, attribute))                                    \
     AMS_SF_METHOD_INFO(C, H,  12, Result, OpenBisStorage,                  (sf::Out<sf::SharedPointer<ams::fssrv::sf::IStorage>> out, u32 bis_partition_id),                                                            (out, bis_partition_id))                                       \
     AMS_SF_METHOD_INFO(C, H, 200, Result, OpenDataStorageByCurrentProcess, (sf::Out<sf::SharedPointer<ams::fssrv::sf::IStorage>> out),                                                                                  (out))                                                         \
@@ -59,6 +61,11 @@ namespace ams::mitm::fs {
                     return true;
                 }
 
+                /* We want to mitm fs, to intercept GameCard requests. */
+                if (program_id == ncm::SystemProgramId::Fs) {
+                    return true;
+                }
+
                 return false;
             }
 
@@ -86,6 +93,8 @@ namespace ams::mitm::fs {
             Result OpenDataStorageByDataId(sf::Out<sf::SharedPointer<ams::fssrv::sf::IStorage>> out, ncm::DataId data_id, u8 storage_id);
             Result OpenDataStorageWithProgramIndex(sf::Out<sf::SharedPointer<ams::fssrv::sf::IStorage>> out, u8 program_index);
             Result RegisterProgramIndexMapInfo(const sf::InBuffer &info_buffer, s32 info_count);
+            Result OpenGameCardStorage(sf::Out<sf::SharedPointer<ams::fssrv::sf::IStorage>> out, ams::fs::GameCardHandle handle, ams::fs::GameCardPartition partition);
+            Result OpenGameCardFileSystem(sf::Out<sf::SharedPointer<ams::fssrv::sf::IFileSystem>> out, ams::fs::GameCardHandle handle, ams::fs::GameCardPartition partition);
     };
     static_assert(IsIFsMitmInterface<FsMitmService>);
 

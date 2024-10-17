@@ -103,3 +103,26 @@ Result fsOpenFileSystemWithIdFwd(Service* s, FsFileSystem* out, u64 id, FsFileSy
         .out_objects = &out->s
     );
 }
+
+Result fsOpenGameCardStorage(Service* s, FsStorage* out, const FsGameCardHandle* handle, u32 partition)
+{
+    const struct {
+        u32 handle;
+        u32 partition;
+    } in = { handle->value, partition };
+    return serviceDispatchIn(s, 30, in,
+        .out_num_objects = 1,
+        .out_objects = &out->s
+    );
+}
+
+Result fsOpenGameCardFileSystem(Service* s, FsFileSystem *out, const FsGameCardHandle *handle, u32 partition){
+    const struct {
+        u32 handle;
+        u32 partition;
+    } in = { handle->value, partition };
+    return serviceDispatchIn(s, 31, in,
+        .out_num_objects = 1,
+        .out_objects = &out->s,
+    );
+}
