@@ -39,7 +39,7 @@ namespace ams::secmon {
         };
         /* u8 l1_page_table[0x40]; */
     };
-    static_assert(sizeof(ConfigurationContext) == 0xFC0);
+    static_assert(sizeof(ConfigurationContext) == 0xFC8);
     static_assert(util::is_pod<ConfigurationContext>::value);
 
     namespace impl {
@@ -113,6 +113,10 @@ namespace ams::secmon {
     }
 
     ALWAYS_INLINE fuse::HardwareState GetHardwareState() {
+        if(GetSecmonConfiguration().ShouldForceDevelopment()) {
+            return fuse::HardwareState_Development;
+        }
+        
         return GetSecmonConfiguration().GetHardwareState();
     }
 
@@ -134,6 +138,14 @@ namespace ams::secmon {
 
     ALWAYS_INLINE bool IsProduction() {
         return GetSecmonConfiguration().IsProduction();
+    }
+
+    ALWAYS_INLINE bool ShouldForceDevelopment() {
+        return GetSecmonConfiguration().ShouldForceDevelopment();
+    }
+
+    ALWAYS_INLINE u64 GetHardcodedDeviceId() {
+        return GetSecmonConfiguration().device_id;
     }
 
 }

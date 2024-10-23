@@ -72,6 +72,14 @@ namespace ams::secmon::smc {
             gcm.GetMac(dst, dst_size);
         }
 
+        ALWAYS_INLINE u64 GetDeviceId() {
+            if(secmon::ShouldForceDevelopment()) {
+                return secmon::GetHardcodedDeviceId();
+            } else {
+                return fuse::GetDeviceId();
+            }
+        }
+
         constexpr u64 GetDeviceIdLow(u64 device_id) {
             /* Mask out the top byte. */
             constexpr u64 ByteMask = (static_cast<u64>(1) << BITSIZEOF(u8)) - 1;
@@ -144,7 +152,7 @@ namespace ams::secmon::smc {
             const u64 device_id_val = util::LoadBigEndian(static_cast<const u64 *>(static_cast<const void *>(device_id)));
 
             /* Validate that the device id low matches the value in fuses. */
-            if (GetDeviceIdLow(device_id_val) != fuse::GetDeviceId()) {
+            if (GetDeviceIdLow(device_id_val) != GetDeviceId()) {
                 return false;
             }
 
@@ -186,7 +194,7 @@ namespace ams::secmon::smc {
             std::memset(dst_pad, 0, DeviceUniqueDataPaddingSize);
 
             /* Store the device id. */
-            util::StoreBigEndian(reinterpret_cast<u64 *>(dst_did), EncodeDeviceId(device_id_high, fuse::GetDeviceId()));
+            util::StoreBigEndian(reinterpret_cast<u64 *>(dst_did), EncodeDeviceId(device_id_high, GetDeviceId()));
         }
 
         /* Encrypt and mac. */

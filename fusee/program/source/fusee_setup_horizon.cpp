@@ -39,7 +39,7 @@ namespace ams::nxboot {
 
         constinit secmon::EmummcConfiguration g_emummc_cfg = {};
 
-        void DeriveAllKeys(const fuse::SocType soc_type) {
+        void DeriveAllKeys(const fuse::SocType soc_type, bool force_dev) {
             /* If on erista, run the TSEC keygen firmware. */
             if (soc_type == fuse::SocType_Erista) {
                 clkrst::SetBpmpClockRate(clkrst::BpmpClockRate_408MHz);
@@ -53,7 +53,7 @@ namespace ams::nxboot {
 
             /* Derive master/device keys. */
             if (soc_type == fuse::SocType_Erista) {
-                DeriveKeysErista();
+                DeriveKeysErista(force_dev);
             } else /* if (soc_type == fuse::SocType_Mariko) */ {
                 DeriveKeysMariko();
             }
@@ -66,12 +66,12 @@ namespace ams::nxboot {
             } else if (result == ParseIniResult_NoFile) {
                 return false;
             } else {
-                ShowFatalError("Failed to parse %s!\n", ini_path);
+                ShowFatalError("Failed to parse %s (%d)!\n", ini_path, result);
             }
         }
 
-        u32 ParseHexInteger(const char *s) {
-            u32 x = 0;
+        u64 ParseHexInteger(const char *s) {
+            u64 x = 0;
             if (s[0] == '0' && s[1] == 'x') {
                 s += 2;
             }
@@ -209,6 +209,7 @@ namespace ams::nxboot {
         ams::TargetFirmware GetApproximateTargetFirmware(const u8 *package1) {
             /* Get an approximation of the target firmware. */
             switch (package1[0x1F]) {
+                case 0x00: // pre-1.0
                 case 0x01:
                     return ams::TargetFirmware_1_0_0;
                 case 0x02:
@@ -219,6 +220,8 @@ namespace ams::nxboot {
                     return ams::TargetFirmware_4_0_0;
                 case 0x0B:
                     return ams::TargetFirmware_5_0_0;
+                case 0x0D: // beta 6.0
+                    return ams::TargetFirmware_6_0_0;
                 case 0x0E:
                     if (std::memcmp(package1 + 0x10, "20180802", 8) == 0) {
                         return ams::TargetFirmware_6_0_0;
@@ -245,10 +248,16 @@ namespace ams::nxboot {
                         return ams::TargetFirmware_12_0_0;
                     } else if (std::memcmp(package1 + 0x10, "20210422", 8) == 0) {
                         return ams::TargetFirmware_12_0_2;
+                    } else if (std::memcmp(package1 + 0x10, "20210427", 8) == 0) {
+                        return ams::TargetFirmware_13_0_0; // 13.0.0 beta
                     } else if (std::memcmp(package1 + 0x10, "20210607", 8) == 0) {
                         return ams::TargetFirmware_12_1_0;
+                    } else if (std::memcmp(package1 + 0x10, "20210716", 8) == 0) {
+                        return ams::TargetFirmware_13_0_0; // 13.0.0 beta
                     } else if (std::memcmp(package1 + 0x10, "20210805", 8) == 0) {
                         return ams::TargetFirmware_13_0_0;
+                    } else if (std::memcmp(package1 + 0x10, "20211021", 8) == 0) {
+                        return ams::TargetFirmware_14_0_0; // 14.0.0 beta.
                     } else if (std::memcmp(package1 + 0x10, "20220105", 8) == 0) {
                         return ams::TargetFirmware_13_2_1;
                     } else if (std::memcmp(package1 + 0x10, "20220209", 8) == 0) {
@@ -482,7 +491,7 @@ namespace ams::nxboot {
             }
         }
 
-        void ConfigureExosphere(fuse::SocType soc_type, ams::TargetFirmware target_firmware, bool emummc_enabled, u32 fs_version) {
+        void ConfigureExosphere(fuse::SocType soc_type, ams::TargetFirmware target_firmware, bool emummc_enabled, bool force_dev, u32 fs_version) {
             /* Get monitor configuration. */
             auto &storage_ctx = *secmon::MemoryRegionPhysicalDramMonitorConfiguration.GetPointer<secmon::SecureMonitorStorageConfiguration>();
             std::memset(std::addressof(storage_ctx), 0, sizeof(storage_ctx));
@@ -498,6 +507,14 @@ namespace ams::nxboot {
             storage_ctx.flags[1]        = secmon::SecureMonitorConfigurationFlag_None;
             storage_ctx.log_port        = uart::Port_ReservedDebug;
             storage_ctx.log_baud_rate   = 115200;
+            storage_ctx.device_id       = 0x651DB334101014;
+
+            /* Set force dev flag */
+            if(force_dev) {
+                storage_ctx.flags[0] |= secmon::SecureMonitorConfigurationFlag_ShouldForceDevelopment;
+            } else {
+                storage_ctx.flags[0] &= ~secmon::SecureMonitorConfigurationFlag_ShouldForceDevelopment;
+            }
 
             /* Set the fs version. */
             storage_ctx.emummc_cfg.base_cfg.fs_version = fs_version;
@@ -521,7 +538,7 @@ namespace ams::nxboot {
                                     storage_ctx.flags[0] &= ~secmon::SecureMonitorConfigurationFlag_IsDevelopmentFunctionEnabledForKernel;
                                 }
                             } else if (std::strcmp(entry.key, "debugmode_user") == 0) {
-                                if (entry.value[0] == '1') {
+                                if (entry.value[0] == '1' || force_dev || fuse::GetHardwareState() == fuse::HardwareState_Development) {// force user debug mode on dev firm
                                     storage_ctx.flags[0] |= secmon::SecureMonitorConfigurationFlag_IsDevelopmentFunctionEnabledForUser;
                                 } else {
                                     storage_ctx.flags[0] &= ~secmon::SecureMonitorConfigurationFlag_IsDevelopmentFunctionEnabledForUser;
@@ -571,6 +588,9 @@ namespace ams::nxboot {
                                 if (entry.value[0] == '1') {
                                     storage_ctx.log_flags |= uart::Flag_Inverted;
                                 }
+                            } else if (std::strcmp(entry.key, "device_id") == 0) {
+                                const u64 device_id = ParseHexInteger(entry.value);
+                                storage_ctx.device_id = device_id;
                             }
                         }
                     }
@@ -720,15 +740,90 @@ namespace ams::nxboot {
 
     }
 
+    bool ShouldForceDevelopment() {
+        IniSectionList exosphere_sections;
+        IniSectionList emummc_sections;
+        bool emummc_enabled = false;
+
+        if (ParseIniSafe(emummc_sections, "sdmc:/emummc/emummc.ini")) {
+            for(const auto &section : emummc_sections) {
+                /* We only care about the [exosphere] section */
+                if (std::strcmp(section.name, "emummc")) {
+                    continue;
+                }
+
+                /* Handle individual fields. */
+                for (const auto &entry : section.kv_list) {
+                    if (std::strcmp(entry.key, "enabled") == 0) {
+                        emummc_enabled = entry.value[0] == '1';
+                    }
+                }
+            }
+        }
+
+        if (ParseIniSafe(exosphere_sections, "sdmc:/exosphere.ini")) {
+            for(const auto &section : exosphere_sections) {
+                /* We only care about the [exosphere] section */
+                if (std::strcmp(section.name, "exosphere")) {
+                    continue;
+                }
+
+                /* Handle individual fields. */
+                for (const auto &entry : section.kv_list) {
+                    if(emummc_enabled) {
+                        if (std::strcmp(entry.key, "force_dev_emummc") == 0) {
+                            return entry.value[0] == '1';
+                        }
+                    } else {
+                        if (std::strcmp(entry.key, "force_dev_sysmmc") == 0) {
+                            return entry.value[0] == '1';
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    bool ShouldDisableStratosphere(bool force_dev, bool emummc_enabled) {
+        /* If running retail firmware or on an emummc, stratosphere should be enabled */
+        if((fuse::GetHardwareState() == fuse::HardwareState_Production && !force_dev) || emummc_enabled) {
+            return false;
+        }
+
+        IniSectionList sections;
+        if (ParseIniSafe(sections, "sdmc:/atmosphere/config/stratosphere.ini")) {
+            for(const auto &section : sections) {
+                /* We only care about the [stratosphere] section */
+                if (std::strcmp(section.name, "stratosphere")) {
+                    continue;
+                }
+
+                /* Handle individual fields. */
+                for (const auto &entry : section.kv_list) {
+                    if (std::strcmp(entry.key, "disable_stratosphere") == 0) {
+                        return entry.value[0] == '1';
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
     void SetupAndStartHorizon() {
+        const bool force_dev = ShouldForceDevelopment();
+
         /* Get soc type. */
         const auto soc_type = fuse::GetSocType();
 
         /* Derive all keys. */
-        DeriveAllKeys(soc_type);
+        DeriveAllKeys(soc_type, force_dev);
 
         /* Determine whether we're using emummc. */
         const bool emummc_enabled = ConfigureEmummc();
+
+        /* Determine whether stratosphere should be disabled */
+        const bool disable_stratosphere = ShouldDisableStratosphere(force_dev, emummc_enabled);
 
         /* Initialize emummc. */
         /* NOTE: SYSTEM:/ accessible past this point. */
@@ -750,10 +845,10 @@ namespace ams::nxboot {
         const bool nogc_enabled = IsNogcEnabled(target_firmware);
 
         /* Decide what KIPs/patches we're loading. */
-        const auto fs_version = ConfigureStratosphere(package2, target_firmware, emummc_enabled, nogc_enabled);
+        const auto fs_version = ConfigureStratosphere(package2, target_firmware, emummc_enabled, nogc_enabled, disable_stratosphere);
 
         /* Setup exosphere. */
-        ConfigureExosphere(soc_type, target_firmware, emummc_enabled, fs_version);
+        ConfigureExosphere(soc_type, target_firmware, emummc_enabled, force_dev, fs_version);
 
         /* Start CPU. */
         StartCpu();

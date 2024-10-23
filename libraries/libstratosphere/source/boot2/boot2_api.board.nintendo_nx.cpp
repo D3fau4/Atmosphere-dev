@@ -39,6 +39,7 @@ namespace ams::boot2 {
             ncm::SystemProgramId::NvServices,  /* nvservices */
             ncm::SystemProgramId::NvnFlinger,  /* nvnflinger */
             ncm::SystemProgramId::Vi,          /* vi */
+            ncm::SystemProgramId::Nvdbgsvc,    /* nvdbgsvc */
             ncm::SystemProgramId::Pgl,         /* pgl */
             ncm::SystemProgramId::Ns,          /* ns */
             //ncm::SystemProgramId::LogManager,  /* lm */
@@ -209,6 +210,16 @@ namespace ams::boot2 {
             u8 enable_ams_lm = 0;
             settings::fwdbg::GetSettingsItemValue(std::addressof(enable_ams_lm), sizeof(enable_ams_lm), "atmosphere", "enable_log_manager");
             return enable_ams_lm != 0;
+        }
+
+        bool UseHtcGen2ForDev() {
+            if(hos::GetVersion() <= hos::Version_10_0_0) {
+                return false;
+            }
+
+            u8 use_htc_gen2 = 1;
+            settings::fwdbg::GetSettingsItemValue(&use_htc_gen2, sizeof(use_htc_gen2), "boot", "use_htc_gen2");
+            return use_htc_gen2 != 0;
         }
 
         bool IsMaintenanceMode() {
@@ -413,17 +424,29 @@ namespace ams::boot2 {
         /* Check for and forward declare non-atmosphere mitm modules. */
         DetectAndDeclareFutureMitms();
 
-        /* Decide whether to launch tma or htc. */
-        if (IsHtcEnabled()) {
-            LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Htc,      ncm::StorageId::None), 0);
-            LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Cs,       ncm::StorageId::None), 0);
-            LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::DmntGen2, ncm::StorageId::None), 0);
-        } else if (IsStandaloneGdbstubEnabled()) {
-            LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::DmntGen2, ncm::StorageId::None), 0);
-            LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Tma,  ncm::StorageId::BuiltInSystem), 0);
+         /* Decide whether to launch tma or htc. */
+        if (spl::IsDevelopment()) {
+            if (UseHtcGen2ForDev()) {
+               LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Htc, ncm::StorageId::BuiltInSystem), 0);
+               LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::DmntGen2, ncm::StorageId::BuiltInSystem), 0);
+
+            } else {
+                LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Tma, ncm::StorageId::BuiltInSystem), 0);
+                LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Dmnt, ncm::StorageId::BuiltInSystem), 0);
+            }
+            LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Cs, ncm::StorageId::BuiltInSystem), 0);
         } else {
-            LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Dmnt, ncm::StorageId::None), 0);
-            LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Tma,  ncm::StorageId::BuiltInSystem), 0);
+            if (IsHtcEnabled()) {
+                LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Htc,      ncm::StorageId::None), 0);
+                LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Cs,       ncm::StorageId::None), 0);
+                LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::DmntGen2, ncm::StorageId::None), 0);
+            } else if (IsStandaloneGdbstubEnabled()) {
+                LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::DmntGen2, ncm::StorageId::None), 0);
+                LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Tma,  ncm::StorageId::BuiltInSystem), 0);
+            } else {
+                LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Dmnt, ncm::StorageId::None), 0);
+                LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Tma,  ncm::StorageId::BuiltInSystem), 0);
+            }
         }
 
         /* Decide whether to launch atmosphere or nintendo's log manager. */

@@ -18,7 +18,7 @@
 
 namespace ams::nxboot {
 
-    void DeriveKeysErista();
+    void DeriveKeysErista(bool force_dev);
     void DeriveKeysMariko();
 
     int PrepareMasterKey(int generation);

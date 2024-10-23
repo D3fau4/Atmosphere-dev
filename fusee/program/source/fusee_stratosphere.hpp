@@ -18,7 +18,7 @@
 
 namespace ams::nxboot {
 
-    u32 ConfigureStratosphere(const u8 *nn_package2, ams::TargetFirmware target_firmware, bool emummc_enabled, bool nogc_enabled);
+    u32 ConfigureStratosphere(const u8 *nn_package2, ams::TargetFirmware target_firmware, bool emummc_enabled, bool nogc_enabled, bool disable_stratosphere);
 
     void RebuildPackage2(ams::TargetFirmware target_firmware, bool emummc_enabled);
 

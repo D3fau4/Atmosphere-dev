@@ -748,7 +748,7 @@ namespace ams::nxboot {
 
     }
 
-    u32 ConfigureStratosphere(const u8 *nn_package2, ams::TargetFirmware target_firmware, bool emummc_enabled, bool nogc_enabled) {
+    u32 ConfigureStratosphere(const u8 *nn_package2, ams::TargetFirmware target_firmware, bool emummc_enabled, bool nogc_enabled, bool stratosphere_disabled) {
         /* Load KIPs off the SD card. */
         {
             /* Create kip dir path. */
@@ -792,8 +792,38 @@ namespace ams::nxboot {
             }
         }
 
-        /* Add the stratosphere kips. */
-        {
+        if (stratosphere_disabled) {
+            constexpr u64 InitialProcessIds[6] {
+                0x0100000000000001,
+                0x0100000000000002,
+                0x0100000000000003,
+                0x0100000000000004,
+                0x0100000000000005,
+                0x0100000000000028,
+            };
+
+            /* Get nintendo header/data. */
+            const pkg2::Package2Header *nn_header = reinterpret_cast<const pkg2::Package2Header *>(nn_package2);
+            const u8 *nn_data = nn_package2 + sizeof(*nn_header);
+
+            /* Get Nintendo INI1. */
+            const InitialProcessBinaryHeader *nn_ini = FindInitialProcessBinary(nn_header, nn_data, target_firmware);
+            if (nn_ini == nullptr || nn_ini->magic != InitialProcessBinaryHeader::Magic) {
+                ShowFatalError("Failed to find INI1!\n");
+            }
+
+            for(u32 i = 0; i < sizeof(InitialProcessIds)/sizeof(u64); i++) {
+                /* Find KIP. */
+                const InitialProcessHeader *nn_kip = FindInitialProcessInBinary(nn_ini, InitialProcessIds[i]);
+                if (nn_kip == nullptr) {
+                    ShowFatalError("Failed to find KIP %llx!\n", InitialProcessIds[i]);
+                }
+    
+                /* Add to binary. */
+                AddInitialProcess(nn_kip);
+            }
+        } else {
+            /* Add the stratosphere kips. */
             const auto &external_package = GetExternalPackage();
             for (u32 i = 0; i < external_package.header.num_kips; ++i) {
                 const auto &meta = external_package.header.kip_metas[i];
@@ -801,6 +831,7 @@ namespace ams::nxboot {
                 AddInitialProcess(reinterpret_cast<const InitialProcessHeader *>(external_package.kips + meta.offset), std::addressof(meta.hash));
             }
         }
+
 
         /* Get meta for FS process. */
         auto *fs_meta = FindInitialProcess(FsProgramId);

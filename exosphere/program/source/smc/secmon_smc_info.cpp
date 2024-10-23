@@ -190,13 +190,21 @@ namespace ams::secmon::smc {
                     args.r[1] = fuse::GetHardwareType();
                     break;
                 case ConfigItem::HardwareState:
-                    args.r[1] = fuse::GetHardwareState();
+                    if(GetSecmonConfiguration().ShouldForceDevelopment()) {
+                        args.r[1] = 0;
+                    } else {
+                        args.r[1] = fuse::GetHardwareState();
+                    }
                     break;
                 case ConfigItem::IsRecoveryBoot:
                     args.r[1] = IsRecoveryBoot();
                     break;
                 case ConfigItem::DeviceId:
-                    args.r[1] = fuse::GetDeviceId();
+                    if(GetSecmonConfiguration().ShouldForceDevelopment()) {
+                        args.r[1] = secmon::GetHardcodedDeviceId();
+                    } else {
+                        args.r[1] = fuse::GetDeviceId();
+                    }
                     break;
                 case ConfigItem::BootReason:
                     {

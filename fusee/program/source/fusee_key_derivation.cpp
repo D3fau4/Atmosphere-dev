@@ -258,12 +258,12 @@ namespace ams::nxboot {
 
     }
 
-    void DeriveKeysErista() {
+    void DeriveKeysErista(bool force_dev) {
         /* Get work buffer. */
         alignas(se::AesBlockSize) u8 work_buffer[se::AesBlockSize];
 
         /* Get whether we're using dev keys. */
-        const bool is_prod = fuse::GetHardwareState() == fuse::HardwareState_Production;
+        const bool is_prod = !force_dev && fuse::GetHardwareState() == fuse::HardwareState_Production;
 
         /* Derive Keyblob Key. */
         se::DecryptAes128(work_buffer, se::AesBlockSize, pkg1::AesKeySlot_Tsec, KeyblobKeySource, se::AesBlockSize);

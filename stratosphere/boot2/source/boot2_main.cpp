@@ -61,6 +61,7 @@ namespace ams {
             R_ABORT_UNLESS(pmshellInitialize());
             R_ABORT_UNLESS(setsysInitialize());
             gpio::Initialize();
+            spl::Initialize();
             ncm::Initialize();
 
             /* Mount the SD card. */
