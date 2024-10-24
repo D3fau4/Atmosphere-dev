@@ -5,6 +5,8 @@ on:
     - cron: '0 0 * * *'
   workflow_dispatch: # Permite ejecutar manualmente la acción
 
+permissions: write-all
+
 env:
   SOURCE_REPO: 'https://github.com/Atmosphere-NX/Atmosphere.git'
   TARGET_BRANCH: 'master'
@@ -36,9 +38,10 @@ jobs:
         git checkout -B ${{ env.WORKING_BRANCH }} origin/${{ env.WORKING_BRANCH }}
 
     - name: Hacer merge de los cambios del repo de origen
-      run: |
-        git merge source-repo/${{ env.TARGET_BRANCH }} --allow-unrelated-histories || echo "No hay cambios para mergear"
+      run: git merge source-repo/${{ env.TARGET_BRANCH }} --allow-unrelated-histories || echo "No hay cambios para mergear"
+
+    - name: Configurar el token de GitHub
+      run: git remote set-url origin https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}
 
     - name: Subir los cambios al repositorio
-      run: |
-        git push origin ${{ env.WORKING_BRANCH }}
+      run: git push origin ${{ env.WORKING_BRANCH }}
